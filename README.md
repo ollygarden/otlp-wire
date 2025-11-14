@@ -42,7 +42,7 @@ go get go.olly.garden/otlp-wire
 import "go.olly.garden/otlp-wire"
 
 // Count signals for rate limiting
-data := otlpwire.MetricsData(otlpBytes)
+data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 count := data.Count()
 if count > limit {
     return errors.New("rate limit exceeded")
@@ -63,13 +63,13 @@ See [example_test.go](example_test.go) for complete working examples.
 ### Type Hierarchy
 
 ```
-MetricsData (ExportMetricsServiceRequest bytes)
+ExportMetricsServiceRequest (OTLP message bytes)
   └─ ResourceMetrics[] (one per resource)
 
-LogsData (ExportLogsServiceRequest bytes)
+ExportLogsServiceRequest (OTLP message bytes)
   └─ ResourceLogs[] (one per resource)
 
-TracesData (ExportTracesServiceRequest bytes)
+ExportTracesServiceRequest (OTLP message bytes)
   └─ ResourceSpans[] (one per resource)
 ```
 
@@ -77,17 +77,17 @@ TracesData (ExportTracesServiceRequest bytes)
 
 **Batch-level operations:**
 ```go
-type MetricsData []byte
-func (m MetricsData) Count() int
-func (m MetricsData) SplitByResource() []ResourceMetrics
+type ExportMetricsServiceRequest []byte
+func (m ExportMetricsServiceRequest) Count() int
+func (m ExportMetricsServiceRequest) SplitByResource() []ResourceMetrics
 
-type LogsData []byte
-func (l LogsData) Count() int
-func (l LogsData) SplitByResource() []ResourceLogs
+type ExportLogsServiceRequest []byte
+func (l ExportLogsServiceRequest) Count() int
+func (l ExportLogsServiceRequest) SplitByResource() []ResourceLogs
 
-type TracesData []byte
-func (t TracesData) Count() int
-func (t TracesData) SplitByResource() []ResourceSpans
+type ExportTracesServiceRequest []byte
+func (t ExportTracesServiceRequest) Count() int
+func (t ExportTracesServiceRequest) SplitByResource() []ResourceSpans
 ```
 
 **Resource-level operations:**

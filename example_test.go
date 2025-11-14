@@ -16,7 +16,7 @@ func Example_globalRateLimiting() {
 	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
 
 	// Count signals for rate limiting
-	data := otlpwire.MetricsData(otlpBytes)
+	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 	count := data.Count()
 
 	globalLimit := 50
@@ -37,7 +37,7 @@ func Example_shardingByService() {
 	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
 
 	// Split batch by resource for sharding
-	data := otlpwire.MetricsData(otlpBytes)
+	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 	numWorkers := 3
 
 	for i, resource := range data.SplitByResource() {
@@ -46,7 +46,7 @@ func Example_shardingByService() {
 		workerID := hash % uint64(numWorkers)
 
 		exportBytes := resource.AsExportRequest()
-		count := otlpwire.MetricsData(exportBytes).Count()
+		count := otlpwire.ExportMetricsServiceRequest(exportBytes).Count()
 
 		fmt.Printf("Resource %d → Worker %d (%d data points)\n", i, workerID, count)
 	}
@@ -64,12 +64,12 @@ func Example_perServiceRateLimiting() {
 	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
 
 	serviceLimit := 15
-	data := otlpwire.MetricsData(otlpBytes)
+	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
 	for _, resource := range data.SplitByResource() {
 		// Count signals in this resource
 		exportBytes := resource.AsExportRequest()
-		count := otlpwire.MetricsData(exportBytes).Count()
+		count := otlpwire.ExportMetricsServiceRequest(exportBytes).Count()
 
 		if count > serviceLimit {
 			fmt.Printf("Resource rejected: %d data points (limit: %d)\n", count, serviceLimit)
@@ -91,7 +91,7 @@ func Example_typeComposition() {
 	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
 
 	// MetricsData wraps complete OTLP message
-	batch := otlpwire.MetricsData(otlpBytes)
+	batch := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 	fmt.Printf("Total data points: %d\n", batch.Count())
 
 	// Split returns []ResourceMetrics
@@ -102,7 +102,7 @@ func Example_typeComposition() {
 	exportBytes := resources[0].AsExportRequest()
 
 	// Cast back to MetricsData to count this resource only
-	singleResourceBatch := otlpwire.MetricsData(exportBytes)
+	singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
 	fmt.Printf("Resource 0 data points: %d\n", singleResourceBatch.Count())
 
 	// Output:

@@ -46,7 +46,7 @@ We don't:
 ### Type Hierarchy
 
 ```
-MetricsData (ExportMetricsServiceRequest bytes)
+ExportMetricsServiceRequest (OTLP message bytes)
   └─ ResourceMetrics[] (one per resource)
       └─ ScopeMetrics[] (scopes within resource)
           └─ Metrics[] (metrics within scope)
@@ -54,16 +54,16 @@ MetricsData (ExportMetricsServiceRequest bytes)
 ```
 
 We expose two levels:
-- **MetricsData** - complete batch (all resources)
+- **ExportMetricsServiceRequest** - complete batch (all resources)
 - **ResourceMetrics** - single resource (all scopes + data points)
 
 ### Types and Methods
 
 ```go
 // Top-level batch types
-type MetricsData []byte
-type LogsData []byte
-type TracesData []byte
+type ExportMetricsServiceRequest []byte
+type ExportLogsServiceRequest []byte
+type ExportTracesServiceRequest []byte
 
 // Resource-level types
 type ResourceMetrics []byte
@@ -71,13 +71,13 @@ type ResourceLogs []byte
 type ResourceSpans []byte
 ```
 
-**MetricsData methods:**
+**ExportMetricsServiceRequest methods:**
 ```go
-func (m MetricsData) Count() int
+func (m ExportMetricsServiceRequest) Count() int
 // Returns total number of metric data points in the entire batch
 // Use case: Rate limiting entire batch
 
-func (m MetricsData) SplitByResource() []ResourceMetrics
+func (m ExportMetricsServiceRequest) SplitByResource() []ResourceMetrics
 // Splits batch into separate resources for sharding/parallel processing
 // Use case: Fan out to workers, route by service
 ```
@@ -93,13 +93,13 @@ func (r ResourceMetrics) AsExportRequest() []byte
 // Use case: Send to OTLP endpoint, count signals in this resource
 ```
 
-**Same pattern for Logs and Traces** (LogsData, ResourceLogs, TracesData, ResourceSpans)
+**Same pattern for Logs and Traces** (ExportLogsServiceRequest, ResourceLogs, ExportTracesServiceRequest, ResourceSpans)
 
 ## Use Cases
 
 ### 1. Global Rate Limiting
 ```go
-data := otlpwire.MetricsData(otlpBytes)
+data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 count := data.Count()
 
 if count > globalLimit {
@@ -111,7 +111,7 @@ processMetrics(data)
 
 ### 2. Per-Service Sharding
 ```go
-data := otlpwire.MetricsData(otlpBytes)
+data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
 for _, resource := range data.SplitByResource() {
     // Hash resource for consistent routing
@@ -125,11 +125,11 @@ for _, resource := range data.SplitByResource() {
 
 ### 3. Per-Service Rate Limiting
 ```go
-data := otlpwire.MetricsData(otlpBytes)
+data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
 for _, resource := range data.SplitByResource() {
     // Count signals in this resource
-    count := otlpwire.MetricsData(resource.AsExportRequest()).Count()
+    count := otlpwire.ExportMetricsServiceRequest(resource.AsExportRequest()).Count()
 
     // Extract service name for limit lookup
     svc := extractServiceName(resource.Resource())
@@ -142,7 +142,7 @@ for _, resource := range data.SplitByResource() {
 
 ### 4. Attribute-Based Filtering
 ```go
-data := otlpwire.MetricsData(otlpBytes)
+data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
 for _, resource := range data.SplitByResource() {
     // Unmarshal just the Resource (small, cheap)
@@ -229,8 +229,8 @@ Extract Resource message from ResourceMetrics:
 Key insight: Types compose naturally
 
 ```go
-// MetricsData wraps complete OTLP message
-batch := otlpwire.MetricsData(otlpBytes)
+// ExportMetricsServiceRequest wraps complete OTLP message
+batch := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
 // Split returns []ResourceMetrics
 resources := batch.SplitByResource()
@@ -238,8 +238,8 @@ resources := batch.SplitByResource()
 // AsExportRequest returns []byte (valid OTLP message)
 exportBytes := resources[0].AsExportRequest()
 
-// Cast back to MetricsData to use same methods
-singleResourceBatch := otlpwire.MetricsData(exportBytes)
+// Cast back to ExportMetricsServiceRequest to use same methods
+singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
 count := singleResourceBatch.Count()  // Count this resource only
 ```
 
@@ -265,17 +265,17 @@ Benchmarks (Apple M4, 5 resources, 100 data points each):
 
 ```go
 // Type alias (chosen)
-type MetricsData []byte
+type ExportMetricsServiceRequest []byte
 
 // vs struct (rejected)
-type MetricsData struct {
+type ExportMetricsServiceRequest struct {
     data []byte
 }
 ```
 
 **Reasons:**
 1. Zero overhead - just a name for []byte
-2. Easy casting: `MetricsData(bytes)`
+2. Easy casting: `ExportMetricsServiceRequest(bytes)`
 3. Passes efficiently (just a slice header)
 4. Clear it's just bytes underneath
 
@@ -315,7 +315,7 @@ func (r ResourceMetrics) ContentHash() uint64
 **Decision:** Method on ResourceMetrics because:
 1. Clear intent: "give me valid OTLP message"
 2. On-demand (pay only if you need it)
-3. Composes with MetricsData casting for counting
+3. Composes with ExportMetricsServiceRequest casting for counting
 
 ## Future Considerations
 
@@ -328,17 +328,17 @@ func (r ResourceMetrics) ContentHash() uint64
 
 2. **Batch merging**
    ```go
-   func MergeMetrics(batches []MetricsData) MetricsData
+   func MergeMetrics(batches []ExportMetricsServiceRequest) ExportMetricsServiceRequest
    ```
 
 3. **Filtering helpers**
    ```go
-   func (m MetricsData) FilterResources(fn func([]byte) bool) MetricsData
+   func (m ExportMetricsServiceRequest) FilterResources(fn func([]byte) bool) ExportMetricsServiceRequest
    ```
 
 4. **Size estimation**
    ```go
-   func (m MetricsData) EstimatedSize() int
+   func (m ExportMetricsServiceRequest) EstimatedSize() int
    ```
 
 ### Backward Compatibility

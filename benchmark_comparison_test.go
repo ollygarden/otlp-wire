@@ -17,7 +17,7 @@ func BenchmarkMetrics_Count_WireFormat(b *testing.B) {
 	bytes, err := marshaler.MarshalMetrics(data)
 	require.NoError(b, err)
 
-	metricsData := MetricsData(bytes)
+	metricsData := ExportMetricsServiceRequest(bytes)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -77,7 +77,7 @@ func BenchmarkMetrics_Split_WireFormat(b *testing.B) {
 	bytes, err := marshaler.MarshalMetrics(data)
 	require.NoError(b, err)
 
-	metricsData := MetricsData(bytes)
+	metricsData := ExportMetricsServiceRequest(bytes)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -127,7 +127,7 @@ func BenchmarkTraces_Count_WireFormat(b *testing.B) {
 	bytes, err := marshaler.MarshalTraces(data)
 	require.NoError(b, err)
 
-	tracesData := TracesData(bytes)
+	tracesData := ExportTracesServiceRequest(bytes)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -173,7 +173,7 @@ func BenchmarkTraces_Split_WireFormat(b *testing.B) {
 	bytes, err := marshaler.MarshalTraces(data)
 	require.NoError(b, err)
 
-	tracesData := TracesData(bytes)
+	tracesData := ExportTracesServiceRequest(bytes)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -223,7 +223,7 @@ func BenchmarkLogs_Count_WireFormat(b *testing.B) {
 	bytes, err := marshaler.MarshalLogs(data)
 	require.NoError(b, err)
 
-	logsData := LogsData(bytes)
+	logsData := ExportLogsServiceRequest(bytes)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -269,7 +269,7 @@ func BenchmarkLogs_Split_WireFormat(b *testing.B) {
 	bytes, err := marshaler.MarshalLogs(data)
 	require.NoError(b, err)
 
-	logsData := LogsData(bytes)
+	logsData := ExportLogsServiceRequest(bytes)
 
 	b.ResetTimer()
 	b.ReportAllocs()

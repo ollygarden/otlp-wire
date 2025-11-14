@@ -13,9 +13,9 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 )
 
-// ========== MetricsData Tests ==========
+// ========== ExportMetricsServiceRequest Tests ==========
 
-func TestMetricsData_Count(t *testing.T) {
+func TestExportMetricsServiceRequest_Count(t *testing.T) {
 	tests := []struct {
 		name          string
 		setupRequest  func() pmetricotlp.ExportRequest
@@ -114,14 +114,14 @@ func TestMetricsData_Count(t *testing.T) {
 			data, err := marshaler.MarshalMetrics(req.Metrics())
 			require.NoError(t, err)
 
-			metricsData := MetricsData(data)
+			metricsData := ExportMetricsServiceRequest(data)
 			count := metricsData.Count()
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
 }
 
-func TestMetricsData_SplitByResource(t *testing.T) {
+func TestExportMetricsServiceRequest_SplitByResource(t *testing.T) {
 	tests := []struct {
 		name           string
 		resourceCounts []int // data points per resource
@@ -170,7 +170,7 @@ func TestMetricsData_SplitByResource(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify original count
-			metricsData := MetricsData(data)
+			metricsData := ExportMetricsServiceRequest(data)
 			originalCount := metricsData.Count()
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
@@ -187,7 +187,7 @@ func TestMetricsData_SplitByResource(t *testing.T) {
 			for i, resource := range splits {
 				// Count using AsExportRequest + cast back to MetricsData
 				exportBytes := resource.AsExportRequest()
-				count := MetricsData(exportBytes).Count()
+				count := ExportMetricsServiceRequest(exportBytes).Count()
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -207,20 +207,20 @@ func TestMetricsData_SplitByResource(t *testing.T) {
 	}
 }
 
-func TestMetricsData_SplitByResource_EmptyData(t *testing.T) {
+func TestExportMetricsServiceRequest_SplitByResource_EmptyData(t *testing.T) {
 	metrics := pmetric.NewMetrics()
 	marshaler := &pmetric.ProtoMarshaler{}
 	data, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(t, err)
 
-	metricsData := MetricsData(data)
+	metricsData := ExportMetricsServiceRequest(data)
 	splits := metricsData.SplitByResource()
 	assert.Empty(t, splits)
 }
 
-// ========== LogsData Tests ==========
+// ========== ExportLogsServiceRequest Tests ==========
 
-func TestLogsData_Count(t *testing.T) {
+func TestExportLogsServiceRequest_Count(t *testing.T) {
 	tests := []struct {
 		name          string
 		setupRequest  func() plogotlp.ExportRequest
@@ -291,14 +291,14 @@ func TestLogsData_Count(t *testing.T) {
 			data, err := marshaler.MarshalLogs(req.Logs())
 			require.NoError(t, err)
 
-			logsData := LogsData(data)
+			logsData := ExportLogsServiceRequest(data)
 			count := logsData.Count()
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
 }
 
-func TestLogsData_SplitByResource(t *testing.T) {
+func TestExportLogsServiceRequest_SplitByResource(t *testing.T) {
 	tests := []struct {
 		name           string
 		resourceCounts []int // log records per resource
@@ -340,7 +340,7 @@ func TestLogsData_SplitByResource(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify original count
-			logsData := LogsData(data)
+			logsData := ExportLogsServiceRequest(data)
 			originalCount := logsData.Count()
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
@@ -356,7 +356,7 @@ func TestLogsData_SplitByResource(t *testing.T) {
 			totalFromSplits := 0
 			for i, resource := range splits {
 				exportBytes := resource.AsExportRequest()
-				count := LogsData(exportBytes).Count()
+				count := ExportLogsServiceRequest(exportBytes).Count()
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -376,9 +376,9 @@ func TestLogsData_SplitByResource(t *testing.T) {
 	}
 }
 
-// ========== TracesData Tests ==========
+// ========== ExportTracesServiceRequest Tests ==========
 
-func TestTracesData_Count(t *testing.T) {
+func TestExportTracesServiceRequest_Count(t *testing.T) {
 	tests := []struct {
 		name          string
 		setupRequest  func() ptraceotlp.ExportRequest
@@ -449,14 +449,14 @@ func TestTracesData_Count(t *testing.T) {
 			data, err := marshaler.MarshalTraces(req.Traces())
 			require.NoError(t, err)
 
-			tracesData := TracesData(data)
+			tracesData := ExportTracesServiceRequest(data)
 			count := tracesData.Count()
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
 }
 
-func TestTracesData_SplitByResource(t *testing.T) {
+func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 	tests := []struct {
 		name           string
 		resourceCounts []int // spans per resource
@@ -498,7 +498,7 @@ func TestTracesData_SplitByResource(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify original count
-			tracesData := TracesData(data)
+			tracesData := ExportTracesServiceRequest(data)
 			originalCount := tracesData.Count()
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
@@ -514,7 +514,7 @@ func TestTracesData_SplitByResource(t *testing.T) {
 			totalFromSplits := 0
 			for i, resource := range splits {
 				exportBytes := resource.AsExportRequest()
-				count := TracesData(exportBytes).Count()
+				count := ExportTracesServiceRequest(exportBytes).Count()
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -559,7 +559,7 @@ func TestResourceMetrics_Resource(t *testing.T) {
 	require.NoError(t, err)
 
 	// Split and verify resources
-	metricsData := MetricsData(data)
+	metricsData := ExportMetricsServiceRequest(data)
 	splits := metricsData.SplitByResource()
 	require.Len(t, splits, 2)
 
@@ -591,7 +591,7 @@ func TestResourceMetrics_Resource_SameAttributes(t *testing.T) {
 	data, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(t, err)
 
-	metricsData := MetricsData(data)
+	metricsData := ExportMetricsServiceRequest(data)
 	splits := metricsData.SplitByResource()
 	require.Len(t, splits, 2)
 
@@ -621,7 +621,7 @@ func BenchmarkMetricsData_Count(b *testing.B) {
 	data, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(b, err)
 
-	metricsData := MetricsData(data)
+	metricsData := ExportMetricsServiceRequest(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -651,7 +651,7 @@ func BenchmarkMetricsData_SplitByResource(b *testing.B) {
 	data, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(b, err)
 
-	metricsData := MetricsData(data)
+	metricsData := ExportMetricsServiceRequest(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -677,7 +677,7 @@ func BenchmarkResourceMetrics_AsExportRequest(b *testing.B) {
 	data, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(b, err)
 
-	metricsData := MetricsData(data)
+	metricsData := ExportMetricsServiceRequest(data)
 	splits := metricsData.SplitByResource()
 	require.Len(b, splits, 1)
 
@@ -706,7 +706,7 @@ func BenchmarkTracesData_Count(b *testing.B) {
 	data, err := marshaler.MarshalTraces(traces)
 	require.NoError(b, err)
 
-	tracesData := TracesData(data)
+	tracesData := ExportTracesServiceRequest(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -733,7 +733,7 @@ func BenchmarkTracesData_SplitByResource(b *testing.B) {
 	data, err := marshaler.MarshalTraces(traces)
 	require.NoError(b, err)
 
-	tracesData := TracesData(data)
+	tracesData := ExportTracesServiceRequest(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -758,7 +758,7 @@ func BenchmarkLogsData_Count(b *testing.B) {
 	data, err := marshaler.MarshalLogs(logs)
 	require.NoError(b, err)
 
-	logsData := LogsData(data)
+	logsData := ExportLogsServiceRequest(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -785,7 +785,7 @@ func BenchmarkLogsData_SplitByResource(b *testing.B) {
 	data, err := marshaler.MarshalLogs(logs)
 	require.NoError(b, err)
 
-	logsData := LogsData(data)
+	logsData := ExportLogsServiceRequest(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -7,7 +7,7 @@
 // # Basic Usage
 //
 //	// Count signals in a batch
-//	data := otlpwire.MetricsData(otlpBytes)
+//	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 //	count := data.Count()
 //
 //	// Split batch by resource for sharding
@@ -32,17 +32,17 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
-// MetricsData represents an OTLP ExportMetricsServiceRequest message.
+// ExportMetricsServiceRequest represents an OTLP ExportMetricsServiceRequest message.
 // Use this type to count metric data points or split batches by resource.
-type MetricsData []byte
+type ExportMetricsServiceRequest []byte
 
-// LogsData represents an OTLP ExportLogsServiceRequest message.
+// ExportLogsServiceRequest represents an OTLP ExportLogsServiceRequest message.
 // Use this type to count log records or split batches by resource.
-type LogsData []byte
+type ExportLogsServiceRequest []byte
 
-// TracesData represents an OTLP ExportTracesServiceRequest message.
+// ExportTracesServiceRequest represents an OTLP ExportTracesServiceRequest message.
 // Use this type to count spans or split batches by resource.
-type TracesData []byte
+type ExportTracesServiceRequest []byte
 
 // ResourceMetrics represents a single ResourceMetrics message extracted from
 // an OTLP batch. Use Resource() to get resource attributes, or AsExportRequest()
@@ -66,11 +66,11 @@ type ResourceSpans []byte
 //
 // Example:
 //
-//	data := otlpwire.MetricsData(otlpBytes)
+//	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 //	if data.Count() > limit {
 //	    return errors.New("rate limit exceeded")
 //	}
-func (m MetricsData) Count() int {
+func (m ExportMetricsServiceRequest) Count() int {
 	count, _ := countMetricDataPoints([]byte(m))
 	return count
 }
@@ -82,12 +82,12 @@ func (m MetricsData) Count() int {
 //
 // Example:
 //
-//	data := otlpwire.MetricsData(otlpBytes)
+//	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 //	for _, resource := range data.SplitByResource() {
 //	    hash := fnv64a(resource.Resource())
 //	    sendToWorker(hash % numWorkers, resource.AsExportRequest())
 //	}
-func (m MetricsData) SplitByResource() []ResourceMetrics {
+func (m ExportMetricsServiceRequest) SplitByResource() []ResourceMetrics {
 	resourceBytes, err := extractResourceMetrics([]byte(m))
 	if err != nil {
 		return nil
@@ -127,7 +127,7 @@ func (r ResourceMetrics) Resource() []byte {
 //	sendToEndpoint(exportBytes)
 //
 //	// Or count signals in this resource
-//	count := otlpwire.MetricsData(exportBytes).Count()
+//	count := otlpwire.ExportMetricsServiceRequest(exportBytes).Count()
 func (r ResourceMetrics) AsExportRequest() []byte {
 	return wrapResourceMetrics([]byte(r))
 }
@@ -136,7 +136,7 @@ func (r ResourceMetrics) AsExportRequest() []byte {
 // Counts without unmarshaling by parsing the protobuf wire format.
 //
 // Use case: Rate limiting entire batch
-func (l LogsData) Count() int {
+func (l ExportLogsServiceRequest) Count() int {
 	count, _ := countLogRecords([]byte(l))
 	return count
 }
@@ -145,7 +145,7 @@ func (l LogsData) Count() int {
 // Each ResourceLogs can be independently routed, counted, or processed.
 //
 // Use case: Sharding batches across workers, per-service routing
-func (l LogsData) SplitByResource() []ResourceLogs {
+func (l ExportLogsServiceRequest) SplitByResource() []ResourceLogs {
 	resourceBytes, err := extractResourceLogs([]byte(l))
 	if err != nil {
 		return nil
@@ -179,7 +179,7 @@ func (r ResourceLogs) AsExportRequest() []byte {
 // Counts without unmarshaling by parsing the protobuf wire format.
 //
 // Use case: Rate limiting entire batch
-func (t TracesData) Count() int {
+func (t ExportTracesServiceRequest) Count() int {
 	count, _ := countSpans([]byte(t))
 	return count
 }
@@ -188,7 +188,7 @@ func (t TracesData) Count() int {
 // Each ResourceSpans can be independently routed, counted, or processed.
 //
 // Use case: Sharding batches across workers, per-service routing
-func (t TracesData) SplitByResource() []ResourceSpans {
+func (t ExportTracesServiceRequest) SplitByResource() []ResourceSpans {
 	resourceBytes, err := extractResourceSpans([]byte(t))
 	if err != nil {
 		return nil
