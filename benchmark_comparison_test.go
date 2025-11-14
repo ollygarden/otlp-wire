@@ -22,7 +22,7 @@ func BenchmarkMetrics_Count_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = metricsData.Count()
+		_ = metricsData.DataPointCount()
 	}
 }
 
@@ -132,7 +132,7 @@ func BenchmarkTraces_Count_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = tracesData.Count()
+		_ = tracesData.SpanCount()
 	}
 }
 
@@ -228,7 +228,7 @@ func BenchmarkLogs_Count_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = logsData.Count()
+		_ = logsData.LogRecordCount()
 	}
 }
 

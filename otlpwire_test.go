@@ -115,7 +115,7 @@ func TestExportMetricsServiceRequest_Count(t *testing.T) {
 			require.NoError(t, err)
 
 			metricsData := ExportMetricsServiceRequest(data)
-			count := metricsData.Count()
+			count := metricsData.DataPointCount()
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
@@ -171,7 +171,7 @@ func TestExportMetricsServiceRequest_SplitByResource(t *testing.T) {
 
 			// Verify original count
 			metricsData := ExportMetricsServiceRequest(data)
-			originalCount := metricsData.Count()
+			originalCount := metricsData.DataPointCount()
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
 				expectedTotal += c
@@ -187,7 +187,7 @@ func TestExportMetricsServiceRequest_SplitByResource(t *testing.T) {
 			for i, resource := range splits {
 				// Count using AsExportRequest + cast back to MetricsData
 				exportBytes := resource.AsExportRequest()
-				count := ExportMetricsServiceRequest(exportBytes).Count()
+				count := ExportMetricsServiceRequest(exportBytes).DataPointCount()
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -292,7 +292,7 @@ func TestExportLogsServiceRequest_Count(t *testing.T) {
 			require.NoError(t, err)
 
 			logsData := ExportLogsServiceRequest(data)
-			count := logsData.Count()
+			count := logsData.LogRecordCount()
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
@@ -341,7 +341,7 @@ func TestExportLogsServiceRequest_SplitByResource(t *testing.T) {
 
 			// Verify original count
 			logsData := ExportLogsServiceRequest(data)
-			originalCount := logsData.Count()
+			originalCount := logsData.LogRecordCount()
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
 				expectedTotal += c
@@ -356,7 +356,7 @@ func TestExportLogsServiceRequest_SplitByResource(t *testing.T) {
 			totalFromSplits := 0
 			for i, resource := range splits {
 				exportBytes := resource.AsExportRequest()
-				count := ExportLogsServiceRequest(exportBytes).Count()
+				count := ExportLogsServiceRequest(exportBytes).LogRecordCount()
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -450,7 +450,7 @@ func TestExportTracesServiceRequest_Count(t *testing.T) {
 			require.NoError(t, err)
 
 			tracesData := ExportTracesServiceRequest(data)
-			count := tracesData.Count()
+			count := tracesData.SpanCount()
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
@@ -499,7 +499,7 @@ func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 
 			// Verify original count
 			tracesData := ExportTracesServiceRequest(data)
-			originalCount := tracesData.Count()
+			originalCount := tracesData.SpanCount()
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
 				expectedTotal += c
@@ -514,7 +514,7 @@ func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 			totalFromSplits := 0
 			for i, resource := range splits {
 				exportBytes := resource.AsExportRequest()
-				count := ExportTracesServiceRequest(exportBytes).Count()
+				count := ExportTracesServiceRequest(exportBytes).SpanCount()
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -625,7 +625,7 @@ func BenchmarkMetricsData_Count(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = metricsData.Count()
+		_ = metricsData.DataPointCount()
 	}
 }
 
@@ -710,7 +710,7 @@ func BenchmarkTracesData_Count(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = tracesData.Count()
+		_ = tracesData.SpanCount()
 	}
 }
 
@@ -762,7 +762,7 @@ func BenchmarkLogsData_Count(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = logsData.Count()
+		_ = logsData.LogRecordCount()
 	}
 }
 

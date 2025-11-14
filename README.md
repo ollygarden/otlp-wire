@@ -43,7 +43,7 @@ import "go.olly.garden/otlp-wire"
 
 // Count signals for rate limiting
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-count := data.Count()
+count := data.DataPointCount()
 if count > limit {
     return errors.New("rate limit exceeded")
 }
@@ -78,15 +78,15 @@ ExportTracesServiceRequest (OTLP message bytes)
 **Batch-level operations:**
 ```go
 type ExportMetricsServiceRequest []byte
-func (m ExportMetricsServiceRequest) Count() int
+func (m ExportMetricsServiceRequest) DataPointCount() int
 func (m ExportMetricsServiceRequest) SplitByResource() []ResourceMetrics
 
 type ExportLogsServiceRequest []byte
-func (l ExportLogsServiceRequest) Count() int
+func (l ExportLogsServiceRequest) LogRecordCount() int
 func (l ExportLogsServiceRequest) SplitByResource() []ResourceLogs
 
 type ExportTracesServiceRequest []byte
-func (t ExportTracesServiceRequest) Count() int
+func (t ExportTracesServiceRequest) SpanCount() int
 func (t ExportTracesServiceRequest) SplitByResource() []ResourceSpans
 ```
 
@@ -121,7 +121,7 @@ Benchmarks on Apple M4 (5 resources, 100 data points each):
 
 | Operation | Time | Allocations |
 |-----------|------|-------------|
-| Count() | ~2μs | 0 allocs |
+| DataPointCount() | ~2μs | 0 allocs |
 | SplitByResource() | ~140ns | 5 allocs |
 | AsExportRequest() | ~160ns | 1 alloc |
 

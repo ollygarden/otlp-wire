@@ -8,7 +8,7 @@
 //
 //	// Count signals in a batch
 //	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-//	count := data.Count()
+//	count := data.DataPointCount()
 //
 //	// Split batch by resource for sharding
 //	for _, resource := range data.SplitByResource() {
@@ -16,14 +16,7 @@
 //	    sendToWorker(hash % numWorkers, resource.AsExportRequest())
 //	}
 //
-// # Design Philosophy
-//
-// This package provides raw bytes and tools - you decide what to do with them:
-//   - Hash for routing? Your choice of algorithm.
-//   - Filter by attributes? Unmarshal Resource bytes only.
-//   - Count signals? Zero-copy wire format parsing.
-//
-// For more details, see the DESIGN.md file in the repository.
+// For more details, see the DESIGN.md and example_test.go.
 package otlpwire
 
 import (
@@ -59,7 +52,7 @@ type ResourceLogs []byte
 // to wrap it back into a valid OTLP message.
 type ResourceSpans []byte
 
-// Count returns the total number of metric data points in the batch.
+// DataPointCount returns the total number of metric data points in the batch.
 // Counts without unmarshaling by parsing the protobuf wire format.
 //
 // Use case: Rate limiting entire batch
@@ -67,10 +60,10 @@ type ResourceSpans []byte
 // Example:
 //
 //	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-//	if data.Count() > limit {
+//	if data.DataPointCount() > limit {
 //	    return errors.New("rate limit exceeded")
 //	}
-func (m ExportMetricsServiceRequest) Count() int {
+func (m ExportMetricsServiceRequest) DataPointCount() int {
 	count, _ := countMetricDataPoints([]byte(m))
 	return count
 }
@@ -127,16 +120,16 @@ func (r ResourceMetrics) Resource() []byte {
 //	sendToEndpoint(exportBytes)
 //
 //	// Or count signals in this resource
-//	count := otlpwire.ExportMetricsServiceRequest(exportBytes).Count()
+//	count := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
 func (r ResourceMetrics) AsExportRequest() []byte {
 	return wrapResourceMetrics([]byte(r))
 }
 
-// Count returns the total number of log records in the batch.
+// LogRecordCount returns the total number of log records in the batch.
 // Counts without unmarshaling by parsing the protobuf wire format.
 //
 // Use case: Rate limiting entire batch
-func (l ExportLogsServiceRequest) Count() int {
+func (l ExportLogsServiceRequest) LogRecordCount() int {
 	count, _ := countLogRecords([]byte(l))
 	return count
 }
@@ -175,11 +168,11 @@ func (r ResourceLogs) AsExportRequest() []byte {
 	return wrapResourceLogs([]byte(r))
 }
 
-// Count returns the total number of spans in the batch.
+// SpanCount returns the total number of spans in the batch.
 // Counts without unmarshaling by parsing the protobuf wire format.
 //
 // Use case: Rate limiting entire batch
-func (t ExportTracesServiceRequest) Count() int {
+func (t ExportTracesServiceRequest) SpanCount() int {
 	count, _ := countSpans([]byte(t))
 	return count
 }

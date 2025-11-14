@@ -73,7 +73,7 @@ type ResourceSpans []byte
 
 **ExportMetricsServiceRequest methods:**
 ```go
-func (m ExportMetricsServiceRequest) Count() int
+func (m ExportMetricsServiceRequest) DataPointCount() int
 // Returns total number of metric data points in the entire batch
 // Use case: Rate limiting entire batch
 
@@ -100,7 +100,7 @@ func (r ResourceMetrics) AsExportRequest() []byte
 ### 1. Global Rate Limiting
 ```go
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-count := data.Count()
+count := data.DataPointCount()
 
 if count > globalLimit {
     return errors.New("rate limit exceeded")
@@ -129,7 +129,7 @@ data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
 for _, resource := range data.SplitByResource() {
     // Count signals in this resource
-    count := otlpwire.ExportMetricsServiceRequest(resource.AsExportRequest()).Count()
+    count := otlpwire.ExportMetricsServiceRequest(resource.AsExportRequest()).DataPointCount()
 
     // Extract service name for limit lookup
     svc := extractServiceName(resource.Resource())
@@ -240,7 +240,7 @@ exportBytes := resources[0].AsExportRequest()
 
 // Cast back to ExportMetricsServiceRequest to use same methods
 singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
-count := singleResourceBatch.Count()  // Count this resource only
+count := singleResourceBatch.DataPointCount()  // Count this resource only
 ```
 
 No need for duplicate methods - the API composes!

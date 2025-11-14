@@ -17,7 +17,7 @@ func Example_globalRateLimiting() {
 
 	// Count signals for rate limiting
 	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-	count := data.Count()
+	count := data.DataPointCount()
 
 	globalLimit := 50
 	if count > globalLimit {
@@ -46,7 +46,7 @@ func Example_shardingByService() {
 		workerID := hash % uint64(numWorkers)
 
 		exportBytes := resource.AsExportRequest()
-		count := otlpwire.ExportMetricsServiceRequest(exportBytes).Count()
+		count := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
 
 		fmt.Printf("Resource %d → Worker %d (%d data points)\n", i, workerID, count)
 	}
@@ -69,7 +69,7 @@ func Example_perServiceRateLimiting() {
 	for _, resource := range data.SplitByResource() {
 		// Count signals in this resource
 		exportBytes := resource.AsExportRequest()
-		count := otlpwire.ExportMetricsServiceRequest(exportBytes).Count()
+		count := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
 
 		if count > serviceLimit {
 			fmt.Printf("Resource rejected: %d data points (limit: %d)\n", count, serviceLimit)
@@ -92,7 +92,7 @@ func Example_typeComposition() {
 
 	// MetricsData wraps complete OTLP message
 	batch := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-	fmt.Printf("Total data points: %d\n", batch.Count())
+	fmt.Printf("Total data points: %d\n", batch.DataPointCount())
 
 	// Split returns []ResourceMetrics
 	resources := batch.SplitByResource()
@@ -103,7 +103,7 @@ func Example_typeComposition() {
 
 	// Cast back to MetricsData to count this resource only
 	singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
-	fmt.Printf("Resource 0 data points: %d\n", singleResourceBatch.Count())
+	fmt.Printf("Resource 0 data points: %d\n", singleResourceBatch.DataPointCount())
 
 	// Output:
 	// Total data points: 25
