@@ -2,8 +2,8 @@
 
 Fast OTLP wire format utilities for Go, designed to improve telemetry pipelines for sharding and metadata extraction.
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/olly-dev/otlp-wire.svg)](https://pkg.go.dev/github.com/olly-dev/otlp-wire)
-[![Go Report Card](https://goreportcard.com/badge/github.com/olly-dev/otlp-wire)](https://goreportcard.com/report/github.com/olly-dev/otlp-wire)
+[![Go Reference](https://pkg.go.dev/badge/go.olly.garden/otlp-wire.svg)](https://pkg.go.dev/go.olly.garden/otlp-wire)
+[![Go Report Card](https://goreportcard.com/badge/go.olly.garden/otlp-wire)](https://goreportcard.com/report/go.olly.garden/otlp-wire)
 
 ## What It Does
 
@@ -33,16 +33,16 @@ See [BENCHMARKS.md](BENCHMARKS.md) for detailed comparison.
 ## Installation
 
 ```bash
-go get github.com/olly-dev/otlp-wire
+go get go.olly.garden/otlp-wire
 ```
 
 ## Quick Start
 
 ```go
-import "github.com/olly-dev/otlp-wire"
+import "go.olly.garden/otlp-wire"
 
 // Count signals for rate limiting
-data := wireformat.MetricsData(otlpBytes)
+data := otlpwire.MetricsData(otlpBytes)
 count := data.Count()
 if count > limit {
     return errors.New("rate limit exceeded")

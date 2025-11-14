@@ -99,7 +99,7 @@ func (r ResourceMetrics) AsExportRequest() []byte
 
 ### 1. Global Rate Limiting
 ```go
-data := wireformat.MetricsData(otlpBytes)
+data := otlpwire.MetricsData(otlpBytes)
 count := data.Count()
 
 if count > globalLimit {
@@ -111,7 +111,7 @@ processMetrics(data)
 
 ### 2. Per-Service Sharding
 ```go
-data := wireformat.MetricsData(otlpBytes)
+data := otlpwire.MetricsData(otlpBytes)
 
 for _, resource := range data.SplitByResource() {
     // Hash resource for consistent routing
@@ -125,11 +125,11 @@ for _, resource := range data.SplitByResource() {
 
 ### 3. Per-Service Rate Limiting
 ```go
-data := wireformat.MetricsData(otlpBytes)
+data := otlpwire.MetricsData(otlpBytes)
 
 for _, resource := range data.SplitByResource() {
     // Count signals in this resource
-    count := wireformat.MetricsData(resource.AsExportRequest()).Count()
+    count := otlpwire.MetricsData(resource.AsExportRequest()).Count()
 
     // Extract service name for limit lookup
     svc := extractServiceName(resource.Resource())
@@ -142,7 +142,7 @@ for _, resource := range data.SplitByResource() {
 
 ### 4. Attribute-Based Filtering
 ```go
-data := wireformat.MetricsData(otlpBytes)
+data := otlpwire.MetricsData(otlpBytes)
 
 for _, resource := range data.SplitByResource() {
     // Unmarshal just the Resource (small, cheap)
@@ -230,7 +230,7 @@ Key insight: Types compose naturally
 
 ```go
 // MetricsData wraps complete OTLP message
-batch := wireformat.MetricsData(otlpBytes)
+batch := otlpwire.MetricsData(otlpBytes)
 
 // Split returns []ResourceMetrics
 resources := batch.SplitByResource()
@@ -239,7 +239,7 @@ resources := batch.SplitByResource()
 exportBytes := resources[0].AsExportRequest()
 
 // Cast back to MetricsData to use same methods
-singleResourceBatch := wireformat.MetricsData(exportBytes)
+singleResourceBatch := otlpwire.MetricsData(exportBytes)
 count := singleResourceBatch.Count()  // Count this resource only
 ```
 

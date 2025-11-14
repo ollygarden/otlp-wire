@@ -1,4 +1,4 @@
-package wireformat
+package otlpwire
 
 import (
 	"testing"

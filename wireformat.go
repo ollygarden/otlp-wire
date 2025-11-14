@@ -1,4 +1,4 @@
-// Package wireformat provides fast, zero-allocation utilities for working with
+// Package otlpwire provides fast, zero-allocation utilities for working with
 // OTLP (OpenTelemetry Protocol) wire format data.
 //
 // This package operates directly on protobuf wire format bytes, enabling operations
@@ -7,7 +7,7 @@
 // # Basic Usage
 //
 //	// Count signals in a batch
-//	data := wireformat.MetricsData(otlpBytes)
+//	data := otlpwire.MetricsData(otlpBytes)
 //	count := data.Count()
 //
 //	// Split batch by resource for sharding
@@ -24,7 +24,7 @@
 //   - Count signals? Zero-copy wire format parsing.
 //
 // For more details, see the DESIGN.md file in the repository.
-package wireformat
+package otlpwire
 
 import (
 	"errors"
@@ -66,7 +66,7 @@ type ResourceSpans []byte
 //
 // Example:
 //
-//	data := wireformat.MetricsData(otlpBytes)
+//	data := otlpwire.MetricsData(otlpBytes)
 //	if data.Count() > limit {
 //	    return errors.New("rate limit exceeded")
 //	}
@@ -82,7 +82,7 @@ func (m MetricsData) Count() int {
 //
 // Example:
 //
-//	data := wireformat.MetricsData(otlpBytes)
+//	data := otlpwire.MetricsData(otlpBytes)
 //	for _, resource := range data.SplitByResource() {
 //	    hash := fnv64a(resource.Resource())
 //	    sendToWorker(hash % numWorkers, resource.AsExportRequest())
@@ -127,7 +127,7 @@ func (r ResourceMetrics) Resource() []byte {
 //	sendToEndpoint(exportBytes)
 //
 //	// Or count signals in this resource
-//	count := wireformat.MetricsData(exportBytes).Count()
+//	count := otlpwire.MetricsData(exportBytes).Count()
 func (r ResourceMetrics) AsExportRequest() []byte {
 	return wrapResourceMetrics([]byte(r))
 }

@@ -1,4 +1,4 @@
-module github.com/olly-dev/otlp-wire
+module go.olly.garden/otlp-wire
 
 go 1.24.5
 
