@@ -397,3 +397,172 @@ func createBenchLogs() plog.Logs {
 	}
 	return logs
 }
+
+// ========== Metrics: Pure Iterator Comparison ==========
+
+func BenchmarkMetrics_Iterator_WireFormat(b *testing.B) {
+	data := createBenchMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	metricsData := ExportMetricsServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		resources, getErr := metricsData.ResourceMetrics()
+		for range resources {
+		}
+		_ = getErr()
+	}
+}
+
+func BenchmarkMetrics_Iterator_Unmarshal(b *testing.B) {
+	data := createBenchMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	unmarshaler := &pmetric.ProtoUnmarshaler{}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		metrics, err := unmarshaler.UnmarshalMetrics(bytes)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for ri := 0; ri < metrics.ResourceMetrics().Len(); ri++ {
+			_ = metrics.ResourceMetrics().At(ri)
+		}
+	}
+}
+
+// ========== Traces: Pure Iterator Comparison ==========
+
+func BenchmarkTraces_Iterator_WireFormat(b *testing.B) {
+	data := createBenchTraces()
+	marshaler := &ptrace.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalTraces(data)
+	require.NoError(b, err)
+
+	tracesData := ExportTracesServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		resources, getErr := tracesData.ResourceSpans()
+		for range resources {
+		}
+		_ = getErr()
+	}
+}
+
+func BenchmarkTraces_Iterator_Unmarshal(b *testing.B) {
+	data := createBenchTraces()
+	marshaler := &ptrace.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalTraces(data)
+	require.NoError(b, err)
+
+	unmarshaler := &ptrace.ProtoUnmarshaler{}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		traces, err := unmarshaler.UnmarshalTraces(bytes)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for ri := 0; ri < traces.ResourceSpans().Len(); ri++ {
+			_ = traces.ResourceSpans().At(ri)
+		}
+	}
+}
+
+// ========== Logs: Pure Iterator Comparison ==========
+
+func BenchmarkLogs_Iterator_WireFormat(b *testing.B) {
+	data := createBenchLogs()
+	marshaler := &plog.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalLogs(data)
+	require.NoError(b, err)
+
+	logsData := ExportLogsServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		resources, getErr := logsData.ResourceLogs()
+		for range resources {
+		}
+		_ = getErr()
+	}
+}
+
+func BenchmarkLogs_Iterator_Unmarshal(b *testing.B) {
+	data := createBenchLogs()
+	marshaler := &plog.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalLogs(data)
+	require.NoError(b, err)
+
+	unmarshaler := &plog.ProtoUnmarshaler{}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		logs, err := unmarshaler.UnmarshalLogs(bytes)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for ri := 0; ri < logs.ResourceLogs().Len(); ri++ {
+			_ = logs.ResourceLogs().At(ri)
+		}
+	}
+}
+
+// ========== Resource Extraction Comparison ==========
+
+func BenchmarkMetrics_ResourceExtraction_WireFormat(b *testing.B) {
+	data := createBenchMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	metricsData := ExportMetricsServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		resources, getErr := metricsData.ResourceMetrics()
+		for rm := range resources {
+			_, _ = rm.Resource()
+		}
+		_ = getErr()
+	}
+}
+
+func BenchmarkMetrics_ResourceExtraction_Unmarshal(b *testing.B) {
+	data := createBenchMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	unmarshaler := &pmetric.ProtoUnmarshaler{}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		metrics, err := unmarshaler.UnmarshalMetrics(bytes)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for ri := 0; ri < metrics.ResourceMetrics().Len(); ri++ {
+			_ = metrics.ResourceMetrics().At(ri).Resource()
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package otlpwire
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // ========== ExportMetricsServiceRequest Tests ==========
@@ -185,8 +187,12 @@ func TestExportMetricsServiceRequest_SplitByResource(t *testing.T) {
 			i := 0
 			resources, getErr := metricsData.ResourceMetrics()
 			for resource := range resources {
-				// Count using AsExportRequest + cast back to MetricsData
-				exportBytes := resource.AsExportRequest()
+				// Count using WriteTo + cast back to MetricsData
+				var buf bytes.Buffer
+				_, err := resource.WriteTo(&buf)
+				require.NoError(t, err)
+				exportBytes := buf.Bytes()
+
 				count, err := ExportMetricsServiceRequest(exportBytes).DataPointCount()
 				require.NoError(t, err)
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
@@ -199,7 +205,9 @@ func TestExportMetricsServiceRequest_SplitByResource(t *testing.T) {
 				assert.Equal(t, 1, splitMetrics.ResourceMetrics().Len(), "each split should have exactly 1 resource")
 
 				// Verify Resource() returns bytes
-				assert.NotEmpty(t, resource.Resource())
+				resourceBytes, err := resource.Resource()
+				require.NoError(t, err)
+				assert.NotEmpty(t, resourceBytes)
 
 				i++
 			}
@@ -367,7 +375,11 @@ func TestExportLogsServiceRequest_SplitByResource(t *testing.T) {
 			i := 0
 			resources, getErr := logsData.ResourceLogs()
 			for resource := range resources {
-				exportBytes := resource.AsExportRequest()
+				var buf bytes.Buffer
+				_, err := resource.WriteTo(&buf)
+				require.NoError(t, err)
+				exportBytes := buf.Bytes()
+
 				count, err := ExportLogsServiceRequest(exportBytes).LogRecordCount()
 				require.NoError(t, err)
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
@@ -380,7 +392,9 @@ func TestExportLogsServiceRequest_SplitByResource(t *testing.T) {
 				assert.Equal(t, 1, splitLogs.ResourceLogs().Len())
 
 				// Verify Resource() returns bytes
-				assert.NotEmpty(t, resource.Resource())
+				resourceBytes, err := resource.Resource()
+				require.NoError(t, err)
+				assert.NotEmpty(t, resourceBytes)
 
 				i++
 			}
@@ -532,7 +546,11 @@ func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 			i := 0
 			resources, getErr := tracesData.ResourceSpans()
 			for resource := range resources {
-				exportBytes := resource.AsExportRequest()
+				var buf bytes.Buffer
+				_, err := resource.WriteTo(&buf)
+				require.NoError(t, err)
+				exportBytes := buf.Bytes()
+
 				count, err := ExportTracesServiceRequest(exportBytes).SpanCount()
 				require.NoError(t, err)
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
@@ -545,7 +563,9 @@ func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 				assert.Equal(t, 1, splitTraces.ResourceSpans().Len())
 
 				// Verify Resource() returns bytes
-				assert.NotEmpty(t, resource.Resource())
+				resourceBytes, err := resource.Resource()
+				require.NoError(t, err)
+				assert.NotEmpty(t, resourceBytes)
 
 				i++
 			}
@@ -589,7 +609,9 @@ func TestResourceMetrics_Resource(t *testing.T) {
 	var resources [][]byte
 	resourcesIter, getErr := metricsData.ResourceMetrics()
 	for resource := range resourcesIter {
-		resources = append(resources, resource.Resource())
+		resourceBytes, err := resource.Resource()
+		require.NoError(t, err)
+		resources = append(resources, resourceBytes)
 	}
 	require.NoError(t, getErr())
 
@@ -627,7 +649,9 @@ func TestResourceMetrics_Resource_SameAttributes(t *testing.T) {
 	var resources [][]byte
 	resourcesIter, getErr := metricsData.ResourceMetrics()
 	for resource := range resourcesIter {
-		resources = append(resources, resource.Resource())
+		resourceBytes, err := resource.Resource()
+		require.NoError(t, err)
+		resources = append(resources, resourceBytes)
 	}
 	require.NoError(t, getErr())
 
@@ -637,13 +661,90 @@ func TestResourceMetrics_Resource_SameAttributes(t *testing.T) {
 	assert.Equal(t, resources[0], resources[1])
 }
 
+// ========== Error Handling Tests ==========
+
+func TestResourceMetrics_Resource_WrongWireType(t *testing.T) {
+	// Craft ResourceMetrics with Resource field having wrong wire type
+	buf := []byte{}
+
+	// Field 1 (Resource) with wire type 0 (varint) instead of 2 (bytes)
+	buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+	buf = protowire.AppendVarint(buf, 12345)
+
+	rm := ResourceMetrics(buf)
+	_, err := rm.Resource()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrong wire type")
+}
+
+func TestResourceMetrics_Resource_Missing(t *testing.T) {
+	// Craft ResourceMetrics without Resource field (only ScopeMetrics)
+	buf := []byte{}
+
+	// Field 2 = ScopeMetrics (empty)
+	buf = protowire.AppendTag(buf, 2, protowire.BytesType)
+	buf = protowire.AppendBytes(buf, []byte{})
+
+	rm := ResourceMetrics(buf)
+	_, err := rm.Resource()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestResourceLogs_Resource_WrongWireType(t *testing.T) {
+	buf := []byte{}
+	buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+	buf = protowire.AppendVarint(buf, 12345)
+
+	rl := ResourceLogs(buf)
+	_, err := rl.Resource()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrong wire type")
+}
+
+func TestResourceLogs_Resource_Missing(t *testing.T) {
+	buf := []byte{}
+	buf = protowire.AppendTag(buf, 2, protowire.BytesType)
+	buf = protowire.AppendBytes(buf, []byte{})
+
+	rl := ResourceLogs(buf)
+	_, err := rl.Resource()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestResourceSpans_Resource_WrongWireType(t *testing.T) {
+	buf := []byte{}
+	buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+	buf = protowire.AppendVarint(buf, 12345)
+
+	rs := ResourceSpans(buf)
+	_, err := rs.Resource()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrong wire type")
+}
+
+func TestResourceSpans_Resource_Missing(t *testing.T) {
+	buf := []byte{}
+	buf = protowire.AppendTag(buf, 2, protowire.BytesType)
+	buf = protowire.AppendBytes(buf, []byte{})
+
+	rs := ResourceSpans(buf)
+	_, err := rs.Resource()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
 // ========== Benchmarks ==========
 
-func BenchmarkMetricsData_Count(b *testing.B) {
-	// Create test data with 5 resources, 100 data points each
+func createBenchMetricsData(b *testing.B, withAttributes bool) ExportMetricsServiceRequest {
 	metrics := pmetric.NewMetrics()
 	for i := 0; i < 5; i++ {
 		rm := metrics.ResourceMetrics().AppendEmpty()
+		if withAttributes {
+			rm.Resource().Attributes().PutStr("service.name", "service-"+string(rune('A'+i)))
+		}
+
 		sm := rm.ScopeMetrics().AppendEmpty()
 		metric := sm.Metrics().AppendEmpty()
 		metric.SetName("test.metric")
@@ -659,7 +760,11 @@ func BenchmarkMetricsData_Count(b *testing.B) {
 	data, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(b, err)
 
-	metricsData := ExportMetricsServiceRequest(data)
+	return ExportMetricsServiceRequest(data)
+}
+
+func BenchmarkMetricsData_Count(b *testing.B) {
+	metricsData := createBenchMetricsData(b, false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -668,28 +773,7 @@ func BenchmarkMetricsData_Count(b *testing.B) {
 }
 
 func BenchmarkMetricsData_SplitByResource(b *testing.B) {
-	// Create test data with 5 resources, 100 data points each
-	metrics := pmetric.NewMetrics()
-	for i := 0; i < 5; i++ {
-		rm := metrics.ResourceMetrics().AppendEmpty()
-		rm.Resource().Attributes().PutStr("service.name", "service-"+string(rune('A'+i)))
-
-		sm := rm.ScopeMetrics().AppendEmpty()
-		metric := sm.Metrics().AppendEmpty()
-		metric.SetName("test.metric")
-		gauge := metric.SetEmptyGauge()
-
-		for j := 0; j < 100; j++ {
-			dp := gauge.DataPoints().AppendEmpty()
-			dp.SetIntValue(int64(j))
-		}
-	}
-
-	marshaler := &pmetric.ProtoMarshaler{}
-	data, err := marshaler.MarshalMetrics(metrics)
-	require.NoError(b, err)
-
-	metricsData := ExportMetricsServiceRequest(data)
+	metricsData := createBenchMetricsData(b, true)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -700,8 +784,7 @@ func BenchmarkMetricsData_SplitByResource(b *testing.B) {
 	}
 }
 
-func BenchmarkResourceMetrics_AsExportRequest(b *testing.B) {
-	// Create single resource
+func createSingleResourceMetric(b *testing.B) ResourceMetrics {
 	metrics := pmetric.NewMetrics()
 	rm := metrics.ResourceMetrics().AppendEmpty()
 	sm := rm.ScopeMetrics().AppendEmpty()
@@ -719,25 +802,49 @@ func BenchmarkResourceMetrics_AsExportRequest(b *testing.B) {
 	require.NoError(b, err)
 
 	metricsData := ExportMetricsServiceRequest(data)
-	var resource ResourceMetrics
 	resources, getErr := metricsData.ResourceMetrics()
 	for r := range resources {
-		resource = r
-		break
+		require.NoError(b, getErr())
+		return r
 	}
-	require.NoError(b, getErr())
+	b.Fatal("no resource found")
+	return nil
+}
+
+func BenchmarkResourceMetrics_WriteTo_Discard(b *testing.B) {
+	resource := createSingleResourceMetric(b)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = resource.AsExportRequest()
+		resource.WriteTo(discard{})
 	}
 }
 
-func BenchmarkTracesData_Count(b *testing.B) {
-	// Create test data with 5 resources, 100 spans each
+func BenchmarkResourceMetrics_WriteTo_Buffer(b *testing.B) {
+	resource := createSingleResourceMetric(b)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var buf bytes.Buffer
+		resource.WriteTo(&buf)
+	}
+}
+
+// discard is a zero-allocation io.Writer for benchmarking
+type discard struct{}
+
+func (discard) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func createBenchTracesData(b *testing.B, withAttributes bool) ExportTracesServiceRequest {
 	traces := ptrace.NewTraces()
 	for i := 0; i < 5; i++ {
 		rs := traces.ResourceSpans().AppendEmpty()
+		if withAttributes {
+			rs.Resource().Attributes().PutStr("service.name", "service-"+string(rune('A'+i)))
+		}
+
 		ss := rs.ScopeSpans().AppendEmpty()
 
 		for j := 0; j < 100; j++ {
@@ -750,7 +857,11 @@ func BenchmarkTracesData_Count(b *testing.B) {
 	data, err := marshaler.MarshalTraces(traces)
 	require.NoError(b, err)
 
-	tracesData := ExportTracesServiceRequest(data)
+	return ExportTracesServiceRequest(data)
+}
+
+func BenchmarkTracesData_Count(b *testing.B) {
+	tracesData := createBenchTracesData(b, false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -759,25 +870,7 @@ func BenchmarkTracesData_Count(b *testing.B) {
 }
 
 func BenchmarkTracesData_SplitByResource(b *testing.B) {
-	// Create test data with 5 resources, 100 spans each
-	traces := ptrace.NewTraces()
-	for i := 0; i < 5; i++ {
-		rs := traces.ResourceSpans().AppendEmpty()
-		rs.Resource().Attributes().PutStr("service.name", "service-"+string(rune('A'+i)))
-
-		ss := rs.ScopeSpans().AppendEmpty()
-
-		for j := 0; j < 100; j++ {
-			span := ss.Spans().AppendEmpty()
-			span.SetName("test.span")
-		}
-	}
-
-	marshaler := &ptrace.ProtoMarshaler{}
-	data, err := marshaler.MarshalTraces(traces)
-	require.NoError(b, err)
-
-	tracesData := ExportTracesServiceRequest(data)
+	tracesData := createBenchTracesData(b, true)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -788,11 +881,14 @@ func BenchmarkTracesData_SplitByResource(b *testing.B) {
 	}
 }
 
-func BenchmarkLogsData_Count(b *testing.B) {
-	// Create test data with 5 resources, 100 logs each
+func createBenchLogsData(b *testing.B, withAttributes bool) ExportLogsServiceRequest {
 	logs := plog.NewLogs()
 	for i := 0; i < 5; i++ {
 		rl := logs.ResourceLogs().AppendEmpty()
+		if withAttributes {
+			rl.Resource().Attributes().PutStr("service.name", "service-"+string(rune('A'+i)))
+		}
+
 		sl := rl.ScopeLogs().AppendEmpty()
 
 		for j := 0; j < 100; j++ {
@@ -805,7 +901,11 @@ func BenchmarkLogsData_Count(b *testing.B) {
 	data, err := marshaler.MarshalLogs(logs)
 	require.NoError(b, err)
 
-	logsData := ExportLogsServiceRequest(data)
+	return ExportLogsServiceRequest(data)
+}
+
+func BenchmarkLogsData_Count(b *testing.B) {
+	logsData := createBenchLogsData(b, false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -814,25 +914,7 @@ func BenchmarkLogsData_Count(b *testing.B) {
 }
 
 func BenchmarkLogsData_SplitByResource(b *testing.B) {
-	// Create test data with 5 resources, 100 logs each
-	logs := plog.NewLogs()
-	for i := 0; i < 5; i++ {
-		rl := logs.ResourceLogs().AppendEmpty()
-		rl.Resource().Attributes().PutStr("service.name", "service-"+string(rune('A'+i)))
-
-		sl := rl.ScopeLogs().AppendEmpty()
-
-		for j := 0; j < 100; j++ {
-			lr := sl.LogRecords().AppendEmpty()
-			lr.Body().SetStr("log message")
-		}
-	}
-
-	marshaler := &plog.ProtoMarshaler{}
-	data, err := marshaler.MarshalLogs(logs)
-	require.NoError(b, err)
-
-	logsData := ExportLogsServiceRequest(data)
+	logsData := createBenchLogsData(b, true)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
