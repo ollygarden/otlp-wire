@@ -1,212 +1,141 @@
-// Package otlpwire provides fast, zero-allocation utilities for working with
-// OTLP (OpenTelemetry Protocol) wire format data.
-//
-// This package operates directly on protobuf wire format bytes, enabling operations
-// like signal counting and batch splitting without the overhead of full unmarshaling.
-//
-// # Basic Usage
-//
-//	// Count signals in a batch
-//	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-//	count := data.DataPointCount()
-//
-//	// Split batch by resource for sharding
-//	for _, resource := range data.SplitByResource() {
-//	    hash := fnv64a(resource.Resource())
-//	    sendToWorker(hash % numWorkers, resource.AsExportRequest())
-//	}
-//
-// For more details, see the DESIGN.md and example_test.go.
+// Package otlpwire provides utilities for working with OTLP wire format data.
 package otlpwire
 
 import (
 	"errors"
+	"iter"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // ExportMetricsServiceRequest represents an OTLP ExportMetricsServiceRequest message.
-// Use this type to count metric data points or split batches by resource.
 type ExportMetricsServiceRequest []byte
 
 // ExportLogsServiceRequest represents an OTLP ExportLogsServiceRequest message.
-// Use this type to count log records or split batches by resource.
 type ExportLogsServiceRequest []byte
 
 // ExportTracesServiceRequest represents an OTLP ExportTracesServiceRequest message.
-// Use this type to count spans or split batches by resource.
 type ExportTracesServiceRequest []byte
 
-// ResourceMetrics represents a single ResourceMetrics message extracted from
-// an OTLP batch. Use Resource() to get resource attributes, or AsExportRequest()
-// to wrap it back into a valid OTLP message.
+// ResourceMetrics represents a single ResourceMetrics message.
 type ResourceMetrics []byte
 
-// ResourceLogs represents a single ResourceLogs message extracted from
-// an OTLP batch. Use Resource() to get resource attributes, or AsExportRequest()
-// to wrap it back into a valid OTLP message.
+// ResourceLogs represents a single ResourceLogs message.
 type ResourceLogs []byte
 
-// ResourceSpans represents a single ResourceSpans message extracted from
-// an OTLP batch. Use Resource() to get resource attributes, or AsExportRequest()
-// to wrap it back into a valid OTLP message.
+// ResourceSpans represents a single ResourceSpans message.
 type ResourceSpans []byte
 
 // DataPointCount returns the total number of metric data points in the batch.
-// Counts without unmarshaling by parsing the protobuf wire format.
-//
-// Use case: Rate limiting entire batch
-//
-// Example:
-//
-//	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-//	if data.DataPointCount() > limit {
-//	    return errors.New("rate limit exceeded")
-//	}
-func (m ExportMetricsServiceRequest) DataPointCount() int {
-	count, _ := countMetricDataPoints([]byte(m))
-	return count
+func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
+	return countMetricDataPoints([]byte(m))
 }
 
-// SplitByResource splits the batch into separate ResourceMetrics, one per resource.
-// Each ResourceMetrics can be independently routed, counted, or processed.
-//
-// Use case: Sharding batches across workers, per-service routing
-//
-// Example:
-//
-//	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-//	for _, resource := range data.SplitByResource() {
-//	    hash := fnv64a(resource.Resource())
-//	    sendToWorker(hash % numWorkers, resource.AsExportRequest())
-//	}
-func (m ExportMetricsServiceRequest) SplitByResource() []ResourceMetrics {
-	resourceBytes, err := extractResourceMetrics([]byte(m))
-	if err != nil {
-		return nil
+// ResourceMetrics returns an iterator over ResourceMetrics in the batch.
+// The returned function should be called after iteration to check for errors.
+func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics], func() error) {
+	var iterErr error
+
+	seq := func(yield func(ResourceMetrics) bool) {
+		forEachResourceMetrics([]byte(m), func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(ResourceMetrics(rb))
+		})
 	}
 
-	result := make([]ResourceMetrics, len(resourceBytes))
-	for i, rb := range resourceBytes {
-		result[i] = ResourceMetrics(rb)
+	errFunc := func() error {
+		return iterErr
 	}
-	return result
+
+	return seq, errFunc
 }
 
 // Resource returns the raw Resource message bytes.
-// The Resource contains attributes like service.name, host.name, etc.
-//
-// Use case: Hash for routing, unmarshal for attribute filtering
-//
-// Example:
-//
-//	resourceBytes := rm.Resource()
-//	hash := xxhash.Sum64(resourceBytes)  // Hash for consistent routing
 func (r ResourceMetrics) Resource() []byte {
 	resourceBytes, _ := extractResourceFromResourceMetrics([]byte(r))
 	return resourceBytes
 }
 
 // AsExportRequest wraps the ResourceMetrics into a valid ExportMetricsServiceRequest.
-// The returned bytes can be sent to OTLP endpoints or cast back to MetricsData.
-//
-// Use case: Send to worker, count signals in this resource
-//
-// Example:
-//
-//	exportBytes := rm.AsExportRequest()
-//
-//	// Send to OTLP endpoint
-//	sendToEndpoint(exportBytes)
-//
-//	// Or count signals in this resource
-//	count := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
 func (r ResourceMetrics) AsExportRequest() []byte {
 	return wrapResourceMetrics([]byte(r))
 }
 
 // LogRecordCount returns the total number of log records in the batch.
-// Counts without unmarshaling by parsing the protobuf wire format.
-//
-// Use case: Rate limiting entire batch
-func (l ExportLogsServiceRequest) LogRecordCount() int {
-	count, _ := countLogRecords([]byte(l))
-	return count
+func (l ExportLogsServiceRequest) LogRecordCount() (int, error) {
+	return countLogRecords([]byte(l))
 }
 
-// SplitByResource splits the batch into separate ResourceLogs, one per resource.
-// Each ResourceLogs can be independently routed, counted, or processed.
-//
-// Use case: Sharding batches across workers, per-service routing
-func (l ExportLogsServiceRequest) SplitByResource() []ResourceLogs {
-	resourceBytes, err := extractResourceLogs([]byte(l))
-	if err != nil {
-		return nil
+// ResourceLogs returns an iterator over ResourceLogs in the batch.
+// The returned function should be called after iteration to check for errors.
+func (l ExportLogsServiceRequest) ResourceLogs() (iter.Seq[ResourceLogs], func() error) {
+	var iterErr error
+
+	seq := func(yield func(ResourceLogs) bool) {
+		forEachResourceLogs([]byte(l), func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(ResourceLogs(rb))
+		})
 	}
 
-	result := make([]ResourceLogs, len(resourceBytes))
-	for i, rb := range resourceBytes {
-		result[i] = ResourceLogs(rb)
+	errFunc := func() error {
+		return iterErr
 	}
-	return result
+
+	return seq, errFunc
 }
 
 // Resource returns the raw Resource message bytes.
-// The Resource contains attributes like service.name, host.name, etc.
-//
-// Use case: Hash for routing, unmarshal for attribute filtering
 func (r ResourceLogs) Resource() []byte {
 	resourceBytes, _ := extractResourceFromResourceLogs([]byte(r))
 	return resourceBytes
 }
 
 // AsExportRequest wraps the ResourceLogs into a valid ExportLogsServiceRequest.
-// The returned bytes can be sent to OTLP endpoints or cast back to LogsData.
-//
-// Use case: Send to worker, count signals in this resource
 func (r ResourceLogs) AsExportRequest() []byte {
 	return wrapResourceLogs([]byte(r))
 }
 
 // SpanCount returns the total number of spans in the batch.
-// Counts without unmarshaling by parsing the protobuf wire format.
-//
-// Use case: Rate limiting entire batch
-func (t ExportTracesServiceRequest) SpanCount() int {
-	count, _ := countSpans([]byte(t))
-	return count
+func (t ExportTracesServiceRequest) SpanCount() (int, error) {
+	return countSpans([]byte(t))
 }
 
-// SplitByResource splits the batch into separate ResourceSpans, one per resource.
-// Each ResourceSpans can be independently routed, counted, or processed.
-//
-// Use case: Sharding batches across workers, per-service routing
-func (t ExportTracesServiceRequest) SplitByResource() []ResourceSpans {
-	resourceBytes, err := extractResourceSpans([]byte(t))
-	if err != nil {
-		return nil
+// ResourceSpans returns an iterator over ResourceSpans in the batch.
+// The returned function should be called after iteration to check for errors.
+func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], func() error) {
+	var iterErr error
+
+	seq := func(yield func(ResourceSpans) bool) {
+		forEachResourceSpans([]byte(t), func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(ResourceSpans(rb))
+		})
 	}
 
-	result := make([]ResourceSpans, len(resourceBytes))
-	for i, rb := range resourceBytes {
-		result[i] = ResourceSpans(rb)
+	errFunc := func() error {
+		return iterErr
 	}
-	return result
+
+	return seq, errFunc
 }
 
 // Resource returns the raw Resource message bytes.
-// The Resource contains attributes like service.name, host.name, etc.
-//
-// Use case: Hash for routing, unmarshal for attribute filtering
 func (r ResourceSpans) Resource() []byte {
 	resourceBytes, _ := extractResourceFromResourceSpans([]byte(r))
 	return resourceBytes
 }
 
 // AsExportRequest wraps the ResourceSpans into a valid ExportTracesServiceRequest.
-// The returned bytes can be sent to OTLP endpoints or cast back to TracesData.
-//
-// Use case: Send to worker, count signals in this resource
 func (r ResourceSpans) AsExportRequest() []byte {
 	return wrapResourceSpans([]byte(r))
 }
@@ -648,16 +577,16 @@ func countInScopeSpans(data []byte) (int, error) {
 	return count, nil
 }
 
-// extractResourceMetrics extracts all ResourceMetrics messages from an
-// ExportMetricsServiceRequest as raw byte slices.
-func extractResourceMetrics(data []byte) ([][]byte, error) {
-	var resourceMetricsBytes [][]byte
+// forEachResourceMetrics iterates over ResourceMetrics messages, calling fn for each.
+// The callback receives resource bytes or an error. Return false to stop iteration.
+func forEachResourceMetrics(data []byte, fn func([]byte, error) bool) {
 	pos := 0
 
 	for pos < len(data) {
 		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return nil, errors.New("malformed protobuf tag in ExportMetricsServiceRequest")
+			fn(nil, errors.New("malformed protobuf tag in ExportMetricsServiceRequest"))
+			return
 		}
 		pos += tagLen
 
@@ -665,32 +594,35 @@ func extractResourceMetrics(data []byte) ([][]byte, error) {
 		if fieldNum == 1 && wireType == protowire.BytesType {
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return nil, errors.New("invalid bytes in ResourceMetrics")
+				fn(nil, errors.New("invalid bytes in ResourceMetrics"))
+				return
 			}
-			resourceMetricsBytes = append(resourceMetricsBytes, msgBytes)
 			pos += n
+
+			if !fn(msgBytes, nil) {
+				return
+			}
 		} else {
 			n := skipField(data[pos:], wireType)
 			if n < 0 {
-				return nil, errors.New("failed to skip field")
+				fn(nil, errors.New("failed to skip field"))
+				return
 			}
 			pos += n
 		}
 	}
-
-	return resourceMetricsBytes, nil
 }
 
-// extractResourceLogs extracts all ResourceLogs messages from an
-// ExportLogsServiceRequest as raw byte slices.
-func extractResourceLogs(data []byte) ([][]byte, error) {
-	var resourceLogsBytes [][]byte
+// forEachResourceLogs iterates over ResourceLogs messages, calling fn for each.
+// The callback receives resource bytes or an error. Return false to stop iteration.
+func forEachResourceLogs(data []byte, fn func([]byte, error) bool) {
 	pos := 0
 
 	for pos < len(data) {
 		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return nil, errors.New("malformed protobuf tag in ExportLogsServiceRequest")
+			fn(nil, errors.New("malformed protobuf tag in ExportLogsServiceRequest"))
+			return
 		}
 		pos += tagLen
 
@@ -698,32 +630,35 @@ func extractResourceLogs(data []byte) ([][]byte, error) {
 		if fieldNum == 1 && wireType == protowire.BytesType {
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return nil, errors.New("invalid bytes in ResourceLogs")
+				fn(nil, errors.New("invalid bytes in ResourceLogs"))
+				return
 			}
-			resourceLogsBytes = append(resourceLogsBytes, msgBytes)
 			pos += n
+
+			if !fn(msgBytes, nil) {
+				return
+			}
 		} else {
 			n := skipField(data[pos:], wireType)
 			if n < 0 {
-				return nil, errors.New("failed to skip field")
+				fn(nil, errors.New("failed to skip field"))
+				return
 			}
 			pos += n
 		}
 	}
-
-	return resourceLogsBytes, nil
 }
 
-// extractResourceSpans extracts all ResourceSpans messages from an
-// ExportTracesServiceRequest as raw byte slices.
-func extractResourceSpans(data []byte) ([][]byte, error) {
-	var resourceSpansBytes [][]byte
+// forEachResourceSpans iterates over ResourceSpans messages, calling fn for each.
+// The callback receives resource bytes or an error. Return false to stop iteration.
+func forEachResourceSpans(data []byte, fn func([]byte, error) bool) {
 	pos := 0
 
 	for pos < len(data) {
 		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return nil, errors.New("malformed protobuf tag in ExportTracesServiceRequest")
+			fn(nil, errors.New("malformed protobuf tag in ExportTracesServiceRequest"))
+			return
 		}
 		pos += tagLen
 
@@ -731,20 +666,23 @@ func extractResourceSpans(data []byte) ([][]byte, error) {
 		if fieldNum == 1 && wireType == protowire.BytesType {
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return nil, errors.New("invalid bytes in ResourceSpans")
+				fn(nil, errors.New("invalid bytes in ResourceSpans"))
+				return
 			}
-			resourceSpansBytes = append(resourceSpansBytes, msgBytes)
 			pos += n
+
+			if !fn(msgBytes, nil) {
+				return
+			}
 		} else {
 			n := skipField(data[pos:], wireType)
 			if n < 0 {
-				return nil, errors.New("failed to skip field")
+				fn(nil, errors.New("failed to skip field"))
+				return
 			}
 			pos += n
 		}
 	}
-
-	return resourceSpansBytes, nil
 }
 
 // wrapResourceMetrics wraps a ResourceMetrics message bytes into a new
