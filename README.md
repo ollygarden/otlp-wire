@@ -8,7 +8,7 @@ Fast OTLP wire format utilities for Go, designed to improve telemetry pipelines 
 ## What It Does
 
 - **Count signals** (metrics/logs/traces) without unmarshaling
-- **Split batches** by resource for parallel processing and sharding
+- **Iterate over resources** with zero allocations for parallel processing and sharding
 - **Extract metadata** for routing decisions with minimal overhead
 
 ## Why Use This
@@ -17,8 +17,8 @@ When processing high-volume OTLP data, full protobuf unmarshaling is expensive.
 otlp-wire operates directly on wire format bytes, providing:
 
 - 🚀 **35-52x faster** counting than unmarshaling (zero allocations)
-- 🧮 **~1000x faster** splitting than unmarshal+remarshal
-- 🔧 **Simple API** - Type-based design that composes naturally
+- 🧮 **~3000-5600x faster** iteration than unmarshal+remarshal (zero allocations)
+- 🔧 **Simple API** - Type-based design with Go 1.23+ iterators
 - 📦 **Zero dependencies** - Only stdlib + protowire
 
 See [BENCHMARKS.md](BENCHMARKS.md) for detailed comparison.
@@ -43,16 +43,23 @@ import "go.olly.garden/otlp-wire"
 
 // Count signals for rate limiting
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-count := data.DataPointCount()
+count, err := data.DataPointCount()
+if err != nil {
+    return err
+}
 if count > limit {
     return errors.New("rate limit exceeded")
 }
 
-// Split batches for sharding
-for _, resource := range data.SplitByResource() {
+// Iterate over resources for sharding (zero allocations)
+resources, getErr := data.ResourceMetrics()
+for resource := range resources {
     hash := fnv64a(resource.Resource())
     workerID := hash % numWorkers
     sendToWorker(workerID, resource.AsExportRequest())
+}
+if err := getErr(); err != nil {
+    return err
 }
 ```
 
@@ -78,16 +85,16 @@ ExportTracesServiceRequest (OTLP message bytes)
 **Batch-level operations:**
 ```go
 type ExportMetricsServiceRequest []byte
-func (m ExportMetricsServiceRequest) DataPointCount() int
-func (m ExportMetricsServiceRequest) SplitByResource() []ResourceMetrics
+func (m ExportMetricsServiceRequest) DataPointCount() (int, error)
+func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics], func() error)
 
 type ExportLogsServiceRequest []byte
-func (l ExportLogsServiceRequest) LogRecordCount() int
-func (l ExportLogsServiceRequest) SplitByResource() []ResourceLogs
+func (l ExportLogsServiceRequest) LogRecordCount() (int, error)
+func (l ExportLogsServiceRequest) ResourceLogs() (iter.Seq[ResourceLogs], func() error)
 
 type ExportTracesServiceRequest []byte
-func (t ExportTracesServiceRequest) SpanCount() int
-func (t ExportTracesServiceRequest) SplitByResource() []ResourceSpans
+func (t ExportTracesServiceRequest) SpanCount() (int, error)
+func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], func() error)
 ```
 
 **Resource-level operations:**
@@ -122,7 +129,7 @@ Benchmarks on Apple M4 (5 resources, 100 data points each):
 | Operation | Time | Allocations |
 |-----------|------|-------------|
 | DataPointCount() | ~2μs | 0 allocs |
-| SplitByResource() | ~140ns | 5 allocs |
+| ResourceMetrics() iterator | ~30ns | 0 allocs |
 | AsExportRequest() | ~160ns | 1 alloc |
 
 ### Comparison vs Unmarshal
@@ -132,9 +139,9 @@ Benchmarks on Apple M4 (5 resources, 100 data points each):
 | Count Metrics | 2.2 μs | 77 μs | **35x faster** |
 | Count Traces | 1.9 μs | 99 μs | **52x faster** |
 | Count Logs | 2.1 μs | 100 μs | **48x faster** |
-| Split Metrics | 134 ns | 133 μs | **~1000x faster** |
-| Split Traces | 136 ns | 169 μs | **~1200x faster** |
-| Split Logs | 134 ns | 175 μs | **~1300x faster** |
+| Iterate Metrics | 32 ns | 133 μs | **~4000x faster** |
+| Iterate Traces | 30 ns | 169 μs | **~5600x faster** |
+| Iterate Logs | 65 ns | 175 μs | **~2700x faster** |
 
 **Key advantage:** No unmarshaling required - works directly on protobuf wire format.
 

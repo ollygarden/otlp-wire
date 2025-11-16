@@ -73,34 +73,38 @@ type ResourceSpans []byte
 
 **ExportMetricsServiceRequest methods:**
 ```go
-func (m ExportMetricsServiceRequest) DataPointCount() int
+func (m ExportMetricsServiceRequest) DataPointCount() (int, error)
 // Returns total number of metric data points in the entire batch
-// Use case: Rate limiting entire batch
 
-func (m ExportMetricsServiceRequest) SplitByResource() []ResourceMetrics
-// Splits batch into separate resources for sharding/parallel processing
-// Use case: Fan out to workers, route by service
+func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics], func() error)
+// Returns iterator and error callback
+// Check error after iteration completes
 ```
 
 **ResourceMetrics methods:**
 ```go
 func (r ResourceMetrics) Resource() []byte
 // Returns raw Resource message bytes (attributes like service.name, host.name)
-// Use case: Hash for routing, unmarshal for filtering
 
 func (r ResourceMetrics) AsExportRequest() []byte
 // Wraps ResourceMetrics in valid ExportMetricsServiceRequest
-// Use case: Send to OTLP endpoint, count signals in this resource
 ```
 
-**Same pattern for Logs and Traces** (ExportLogsServiceRequest, ResourceLogs, ExportTracesServiceRequest, ResourceSpans)
+**Same pattern for Logs and Traces:**
+- `ExportLogsServiceRequest.LogRecordCount() (int, error)`
+- `ExportLogsServiceRequest.ResourceLogs() (iter.Seq[ResourceLogs], func() error)`
+- `ExportTracesServiceRequest.SpanCount() (int, error)`
+- `ExportTracesServiceRequest.ResourceSpans() (iter.Seq[ResourceSpans], func() error)`
 
 ## Use Cases
 
 ### 1. Global Rate Limiting
 ```go
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-count := data.DataPointCount()
+count, err := data.DataPointCount()
+if err != nil {
+    return err
+}
 
 if count > globalLimit {
     return errors.New("rate limit exceeded")
@@ -109,11 +113,12 @@ if count > globalLimit {
 processMetrics(data)
 ```
 
-### 2. Per-Service Sharding
+### 2. Per-Service Sharding (Zero Allocations)
 ```go
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
-for _, resource := range data.SplitByResource() {
+resources, getErr := data.ResourceMetrics()
+for resource := range resources {
     // Hash resource for consistent routing
     hash := fnv64a(resource.Resource())
     workerID := hash % numWorkers
@@ -121,22 +126,31 @@ for _, resource := range data.SplitByResource() {
     // Send valid OTLP message to worker
     sendToWorker(workerID, resource.AsExportRequest())
 }
+if err := getErr(); err != nil {
+    return err
+}
 ```
 
-### 3. Per-Service Rate Limiting
+### 3. Per-Service Rate Limiting with Early Exit
 ```go
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
-for _, resource := range data.SplitByResource() {
+resources, getErr := data.ResourceMetrics()
+for resource := range resources {
     // Count signals in this resource
-    count := otlpwire.ExportMetricsServiceRequest(resource.AsExportRequest()).DataPointCount()
+    exportBytes := resource.AsExportRequest()
+    count, _ := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
 
     // Extract service name for limit lookup
     svc := extractServiceName(resource.Resource())
 
     if count > serviceLimit[svc] {
         reject(resource)
+        break // Early exit - stop processing remaining resources
     }
+}
+if err := getErr(); err != nil {
+    return err
 }
 ```
 
@@ -144,7 +158,8 @@ for _, resource := range data.SplitByResource() {
 ```go
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
-for _, resource := range data.SplitByResource() {
+resources, getErr := data.ResourceMetrics()
+for resource := range resources {
     // Unmarshal just the Resource (small, cheap)
     res := unmarshalResource(resource.Resource())
 
@@ -152,13 +167,17 @@ for _, resource := range data.SplitByResource() {
         sendToProdPipeline(resource.AsExportRequest())
     }
 }
+if err := getErr(); err != nil {
+    return err
+}
 ```
 
 ### 5. Deduplication
 ```go
 seenHashes := make(map[uint64]bool)
 
-for _, resource := range data.SplitByResource() {
+resources, getErr := data.ResourceMetrics()
+for resource := range resources {
     // Hash entire resource data for deduplication
     hash := xxhash(resource.AsExportRequest())
 
@@ -169,6 +188,26 @@ for _, resource := range data.SplitByResource() {
     seenHashes[hash] = true
     process(resource.AsExportRequest())
 }
+if err := getErr(); err != nil {
+    return err
+}
+```
+
+### 6. All-or-Nothing Processing
+```go
+// Collect all resources first (validates during collection)
+resources, getErr := data.ResourceMetrics()
+all := slices.Collect(resources)
+if err := getErr(); err != nil {
+    return err // Error during iteration - nothing processed yet
+}
+
+// Now process atomically
+tx.Begin()
+for _, resource := range all {
+    process(resource)
+}
+tx.Commit()
 ```
 
 ## Implementation Details
@@ -198,14 +237,15 @@ Navigate wire format to count data points without unmarshaling:
 
 **Performance**: ~90% CPU reduction vs unmarshaling, 98% fewer allocations
 
-### Split Implementation
+### Iterator Implementation
 
-Extract ResourceMetrics as raw bytes:
-1. Parse top-level to find each ResourceMetrics field
-2. Extract raw bytes for each (using protowire.ConsumeBytes)
-3. Return as []ResourceMetrics
+Iterate over ResourceMetrics with zero allocations:
+1. Use callback-based internal function `forEachResourceMetrics`
+2. Parse protobuf tags on-demand during iteration
+3. Extract raw bytes for each ResourceMetrics as we iterate
+4. Support early exit (break stops parsing remaining resources)
 
-**Performance**: ~800ns for 5 resources
+**Performance**: ~30ns per iteration, 0 allocations (no slice container)
 
 ### AsExportRequest Implementation
 
@@ -232,15 +272,19 @@ Key insight: Types compose naturally
 // ExportMetricsServiceRequest wraps complete OTLP message
 batch := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
-// Split returns []ResourceMetrics
-resources := batch.SplitByResource()
+// Iterate over resources
+resources, getErr := batch.ResourceMetrics()
+for resource := range resources {
+    // AsExportRequest returns []byte (valid OTLP message)
+    exportBytes := resource.AsExportRequest()
 
-// AsExportRequest returns []byte (valid OTLP message)
-exportBytes := resources[0].AsExportRequest()
-
-// Cast back to ExportMetricsServiceRequest to use same methods
-singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
-count := singleResourceBatch.DataPointCount()  // Count this resource only
+    // Cast back to ExportMetricsServiceRequest to use same methods
+    singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
+    count, _ := singleResourceBatch.DataPointCount()  // Count this resource only
+}
+if err := getErr(); err != nil {
+    return err
+}
 ```
 
 No need for duplicate methods - the API composes!
@@ -251,13 +295,14 @@ Benchmarks (Apple M4, 5 resources, 100 data points each):
 
 | Operation | Time | Memory | Allocations |
 |-----------|------|--------|-------------|
-| Count() | ~800 ns | 0 B | 0 allocs |
-| SplitByResource() | ~800 ns | 7 KB | 10 allocs |
-| AsExportRequest() | ~90 ns | ~100 B | 1 alloc |
+| DataPointCount() | ~2 μs | 0 B | 0 allocs |
+| ResourceMetrics() iterator | ~32 ns | 0 B | 0 allocs |
+| AsExportRequest() | ~160 ns | ~100 B | 1 alloc |
 
 **vs. Full Unmarshaling:**
-- Count: 90% faster, 98% fewer allocations
-- Split: Still faster than unmarshal + re-marshal
+- Count: 35-52x faster, 100% fewer allocations
+- Iteration: ~4000x faster, 100% fewer allocations (no slice container)
+- AsExportRequest: ~800x faster than unmarshal+remarshal
 
 ## Design Decisions
 
@@ -279,16 +324,87 @@ type ExportMetricsServiceRequest struct {
 3. Passes efficiently (just a slice header)
 4. Clear it's just bytes underneath
 
-### Why only Resource-level splitting?
+### Why iterators instead of slices?
+
+**Alternatives considered:**
+```go
+// Slice-based (rejected)
+func (m ExportMetricsServiceRequest) SplitByResource() ([]ResourceMetrics, error)
+
+// Iterator with error callback (chosen)
+func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics], func() error)
+```
+
+**Decision:** Iterators because:
+1. **Zero allocations** - No `[]ResourceMetrics` container allocation
+2. **Lazy evaluation** - Resources parsed on-demand during iteration
+3. **Early exit** - Break stops parsing remaining resources (critical for rate limiting)
+4. **Streaming** - Process resources immediately without buffering
+
+**Trade-off:** Requires Go 1.23+, but the performance benefits are worth it for high-throughput pipelines.
+
+### Why error callback instead of iter.Seq2?
+
+**Alternatives considered:**
+```go
+// iter.Seq2 (rejected)
+func (m ExportMetricsServiceRequest) ResourceMetrics() iter.Seq2[ResourceMetrics, error]
+for resource, err := range data.ResourceMetrics() {
+    if err != nil { return err }
+    // process
+}
+
+// Error callback (chosen)
+func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics], func() error)
+resources, getErr := data.ResourceMetrics()
+for resource := range resources {
+    // process
+}
+if err := getErr(); err != nil { return err }
+```
+
+**Decision:** Error callback because:
+
+1. **Matches Go stdlib patterns** - Same as `bufio.Scanner.Err()` and `sql.Rows.Err()`
+2. **Standard `iter.Seq`** - Works with stdlib utilities like `slices.Collect()`
+3. **Errors stop iteration** - In practice, errors aren't per-item but "stream stopped"
+4. **Enables all-or-nothing** - Can collect all resources first, then process
+5. **Semantic clarity** - `iter.Seq2` designed for key-value pairs, not value-error pairs
+
+**Error behavior:**
+- Errors occur at protobuf parsing failures (malformed tags, truncated data)
+- When error occurs, iteration stops completely
+- Can't skip bad resources and continue (data structure corrupted)
+- Similar to `Scanner.Scan()` returning false on error
+
+**Usage patterns enabled:**
+```go
+// Streaming (partial processing OK)
+resources, getErr := data.ResourceMetrics()
+for resource := range resources {
+    sendToWorker(resource) // Process as you go
+}
+if err := getErr(); err != nil { return err }
+
+// All-or-nothing (no partial processing)
+resources, getErr := data.ResourceMetrics()
+all := slices.Collect(resources) // Collect ALL first
+if err := getErr(); err != nil { return err } // No processing happened yet
+for _, resource := range all {
+    process(resource) // Process after validation
+}
+```
+
+### Why only Resource-level iteration?
 
 **Considered:**
-- Scope-level splitting
-- Metric-level splitting
+- Scope-level iteration
+- Metric-level iteration
 
 **Decision:** Resource-level is sufficient because:
 1. Sharding is primarily by service/container (= resource)
-2. Scope/metric-level splitting has unclear use cases
-3. Users can split by resource, then unmarshal for finer filtering
+2. Scope/metric-level iteration has unclear use cases
+3. Users can iterate by resource, then unmarshal for finer filtering
 4. YAGNI - add later if demand emerges
 
 ### Why no built-in hashing?
@@ -321,19 +437,19 @@ func (r ResourceMetrics) ContentHash() uint64
 
 ### Potential Additions (if demand emerges)
 
-1. **Scope-level splitting**
+1. **Scope-level iteration**
    ```go
-   func (r ResourceMetrics) SplitByScope() []ScopeMetrics
+   func (r ResourceMetrics) ScopeMetrics() iter.Seq2[ScopeMetrics, error]
    ```
 
-2. **Batch merging**
+2. **Resource count** (for pre-allocation if needed)
    ```go
-   func MergeMetrics(batches []ExportMetricsServiceRequest) ExportMetricsServiceRequest
+   func (m ExportMetricsServiceRequest) ResourceCount() (int, error)
    ```
 
 3. **Filtering helpers**
    ```go
-   func (m ExportMetricsServiceRequest) FilterResources(fn func([]byte) bool) ExportMetricsServiceRequest
+   func FilterResources(data ExportMetricsServiceRequest, fn func(ResourceMetrics) bool) iter.Seq2[ResourceMetrics, error]
    ```
 
 4. **Size estimation**
