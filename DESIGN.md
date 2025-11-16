@@ -2,15 +2,16 @@
 
 ## Problem Statement
 
-When processing OTLP (OpenTelemetry Protocol) telemetry data, common operations include:
-1. **Counting signals** for rate limiting/telemetry
-2. **Splitting batches** for parallel processing/sharding
+Edge ingester services receiving OTLP (OpenTelemetry Protocol) data need to perform operations like:
+1. **Counting signals** for observability and monitoring
+2. **Splitting batches** for parallel processing/sharding across workers
 3. **Extracting metadata** for routing decisions
 
 Current approaches require full unmarshaling, which is expensive:
 - High CPU usage (parsing entire protobuf structure)
 - High memory allocation (creating Go objects for all data)
-- Unnecessary when you only need counts or batch splitting
+- Garbage collector pressure from thousands of short-lived objects
+- Unnecessary overhead when only making routing/sharding decisions
 
 ## Goals
 
@@ -22,9 +23,9 @@ Current approaches require full unmarshaling, which is expensive:
 
 ## Non-Goals
 
-1. **Not a complete OTLP parser** - use official libraries for that
+1. **Not a complete OTLP parser** - use official libraries for full deserialization
 2. **Not attribute-aware** - we don't read/filter by attribute values
-3. **Not scope/metric-level splitting** - resource-level is sufficient for sharding
+3. **Not scope/metric-level splitting** - only resource-level granularity is provided
 4. **Not a query language** - no path expressions or complex filters
 
 ## Core Principle
@@ -83,11 +84,11 @@ func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics
 
 **ResourceMetrics methods:**
 ```go
-func (r ResourceMetrics) Resource() []byte
+func (r ResourceMetrics) Resource() ([]byte, error)
 // Returns raw Resource message bytes (attributes like service.name, host.name)
 
-func (r ResourceMetrics) AsExportRequest() []byte
-// Wraps ResourceMetrics in valid ExportMetricsServiceRequest
+func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error)
+// Writes ResourceMetrics as valid ExportMetricsServiceRequest
 ```
 
 **Same pattern for Logs and Traces:**
@@ -120,26 +121,30 @@ data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 resources, getErr := data.ResourceMetrics()
 for resource := range resources {
     // Hash resource for consistent routing
-    hash := fnv64a(resource.Resource())
+    resourceBytes, _ := resource.Resource()
+    hash := fnv64a(resourceBytes)
     workerID := hash % numWorkers
 
     // Send valid OTLP message to worker
-    sendToWorker(workerID, resource.AsExportRequest())
+    var buf bytes.Buffer
+    resource.WriteTo(&buf)
+    sendToWorker(workerID, buf.Bytes())
 }
 if err := getErr(); err != nil {
     return err
 }
 ```
 
-### 3. Per-Service Rate Limiting with Early Exit
+### 3. Per-Service Observability with Early Exit
 ```go
 data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 
 resources, getErr := data.ResourceMetrics()
 for resource := range resources {
     // Count signals in this resource
-    exportBytes := resource.AsExportRequest()
-    count, _ := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
+    var buf bytes.Buffer
+    resource.WriteTo(&buf)
+    count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
 
     // Extract service name for limit lookup
     svc := extractServiceName(resource.Resource())
@@ -161,10 +166,13 @@ data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 resources, getErr := data.ResourceMetrics()
 for resource := range resources {
     // Unmarshal just the Resource (small, cheap)
-    res := unmarshalResource(resource.Resource())
+    resourceBytes, _ := resource.Resource()
+    res := unmarshalResource(resourceBytes)
 
     if res.Attributes["environment"] == "production" {
-        sendToProdPipeline(resource.AsExportRequest())
+        var buf bytes.Buffer
+        resource.WriteTo(&buf)
+        sendToProdPipeline(buf.Bytes())
     }
 }
 if err := getErr(); err != nil {
@@ -179,14 +187,16 @@ seenHashes := make(map[uint64]bool)
 resources, getErr := data.ResourceMetrics()
 for resource := range resources {
     // Hash entire resource data for deduplication
-    hash := xxhash(resource.AsExportRequest())
+    var buf bytes.Buffer
+    resource.WriteTo(&buf)
+    hash := xxhash(buf.Bytes())
 
     if seenHashes[hash] {
         continue // Duplicate - skip
     }
 
     seenHashes[hash] = true
-    process(resource.AsExportRequest())
+    process(buf.Bytes())
 }
 if err := getErr(); err != nil {
     return err
@@ -247,14 +257,14 @@ Iterate over ResourceMetrics with zero allocations:
 
 **Performance**: ~30ns per iteration, 0 allocations (no slice container)
 
-### AsExportRequest Implementation
+### WriteTo Implementation
 
-Wrap ResourceMetrics in valid ExportMetricsServiceRequest:
+Write ResourceMetrics as valid ExportMetricsServiceRequest to io.Writer:
 1. Encode field tag (field 1, wire type 2)
 2. Encode length prefix
-3. Append ResourceMetrics bytes
+3. Write ResourceMetrics bytes
 
-**Performance**: ~90ns overhead
+**Performance**: Included in iterator time (~50ns total for iterate + write)
 
 ### Resource Extraction
 
@@ -275,11 +285,12 @@ batch := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 // Iterate over resources
 resources, getErr := batch.ResourceMetrics()
 for resource := range resources {
-    // AsExportRequest returns []byte (valid OTLP message)
-    exportBytes := resource.AsExportRequest()
+    // WriteTo creates valid OTLP message
+    var buf bytes.Buffer
+    resource.WriteTo(&buf)
 
     // Cast back to ExportMetricsServiceRequest to use same methods
-    singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
+    singleResourceBatch := otlpwire.ExportMetricsServiceRequest(buf.Bytes())
     count, _ := singleResourceBatch.DataPointCount()  // Count this resource only
 }
 if err := getErr(); err != nil {
@@ -295,14 +306,19 @@ Benchmarks (Apple M4, 5 resources, 100 data points each):
 
 | Operation | Time | Memory | Allocations |
 |-----------|------|--------|-------------|
-| DataPointCount() | ~2 μs | 0 B | 0 allocs |
-| ResourceMetrics() iterator | ~32 ns | 0 B | 0 allocs |
-| AsExportRequest() | ~160 ns | ~100 B | 1 alloc |
+| DataPointCount() | ~2.3 μs | 0 B | 0 allocs |
+| ResourceMetrics() iterator | ~56 ns | 24 B | 2 allocs |
+| WriteTo() | included in iterator time | 0 B | 0 allocs |
 
 **vs. Full Unmarshaling:**
-- Count: 35-52x faster, 100% fewer allocations
-- Iteration: ~4000x faster, 100% fewer allocations (no slice container)
-- AsExportRequest: ~800x faster than unmarshal+remarshal
+- Count: 35-55x faster, zero allocations, no GC pressure
+- Iteration: 1,100-2,800x faster, minimal allocations (2 per batch for error handling)
+- Split (Iterate + WriteTo): 2,800-3,700x faster than unmarshal+remarshal
+
+**Garbage Collector Impact:**
+- Unmarshaling a 500-datapoint batch creates 5,000+ objects (ResourceMetrics, ScopeMetrics, Metric, DataPoint, attribute maps)
+- Wire format operations create 0-2 objects per batch
+- Significantly reduced GC pause frequency and duration in high-throughput scenarios
 
 ## Design Decisions
 
@@ -336,12 +352,12 @@ func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics
 ```
 
 **Decision:** Iterators because:
-1. **Zero allocations** - No `[]ResourceMetrics` container allocation
+1. **Minimal allocations** - No `[]ResourceMetrics` container allocation
 2. **Lazy evaluation** - Resources parsed on-demand during iteration
-3. **Early exit** - Break stops parsing remaining resources (critical for rate limiting)
+3. **Early exit** - Break stops parsing remaining resources
 4. **Streaming** - Process resources immediately without buffering
 
-**Trade-off:** Requires Go 1.23+, but the performance benefits are worth it for high-throughput pipelines.
+**Trade-off:** Requires Go 1.23+ for iterator support.
 
 ### Why error callback instead of iter.Seq2?
 
@@ -421,17 +437,18 @@ func (r ResourceMetrics) ContentHash() uint64
 3. Choice of when to hash (routing? deduplication? never?)
 4. Avoids 7x performance penalty for users who don't need it
 
-### Why AsExportRequest()?
+### Why WriteTo()?
 
 **Alternatives considered:**
 1. Return raw ResourceMetrics bytes (not valid OTLP)
-2. Provide separate Wrap() function
-3. Auto-wrap in SplitByResource()
+2. Return `[]byte` wrapping method like AsExportRequest()
+3. Auto-wrap in iterator
 
-**Decision:** Method on ResourceMetrics because:
-1. Clear intent: "give me valid OTLP message"
-2. On-demand (pay only if you need it)
-3. Composes with ExportMetricsServiceRequest casting for counting
+**Decision:** WriteTo implements io.WriterTo because:
+1. Standard Go interface - works with any io.Writer
+2. Avoids unnecessary allocations - write directly to network/buffer
+3. Clear intent: write this resource as valid OTLP message
+4. On-demand (pay only if you need it)
 
 ## Future Considerations
 

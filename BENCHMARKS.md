@@ -4,126 +4,202 @@ Comparison of otlp-wire operations vs traditional unmarshal/marshal approaches.
 
 **Test Setup:**
 - Platform: Apple M4
-- Data: 5 resources, 100 data points each per resource
+- Data: 5 resources, 100 data points/spans/logs per resource
 - Go version: 1.24.5
 
-## Count Operations
+## Counting Operations
 
-### Metrics
+### Metrics - DataPointCount()
 
-| Method | Time | Memory | Allocations | Speedup |
-|--------|------|--------|-------------|---------|
-| Wire Format | 2.2 μs | 0 B | 0 | **baseline** |
-| Unmarshal | 77.0 μs | 143 KB | 5,161 | **35x slower** |
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format | 2.3 μs | 0 B | 0 |
+| Unmarshal | 81.0 μs | 143 KB | 5,161 |
 
-**Result:** Wire format counting is **35x faster** with **zero allocations**.
+Speedup: 35.1x faster, zero allocations
 
-### Traces
+### Traces - SpanCount()
 
-| Method | Time | Memory | Allocations | Speedup |
-|--------|------|--------|-------------|---------|
-| Wire Format | 1.9 μs | 0 B | 0 | **baseline** |
-| Unmarshal | 99.4 μs | 217 KB | 5,131 | **52x slower** |
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format | 2.1 μs | 0 B | 0 |
+| Unmarshal | 115.3 μs | 217 KB | 5,131 |
 
-**Result:** Wire format counting is **52x faster** with **zero allocations**.
+Speedup: 55.5x faster, zero allocations
 
-### Logs
+### Logs - LogRecordCount()
 
-| Method | Time | Memory | Allocations | Speedup |
-|--------|------|--------|-------------|---------|
-| Wire Format | 2.1 μs | 0 B | 0 | **baseline** |
-| Unmarshal | 99.7 μs | 198 KB | 6,131 | **48x slower** |
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format | 2.2 μs | 0 B | 0 |
+| Unmarshal | 108.9 μs | 198 KB | 6,131 |
 
-**Result:** Wire format counting is **48x faster** with **zero allocations**.
-
----
-
-## Split Operations
-
-### Metrics
-
-| Method | Time | Memory | Allocations | Speedup |
-|--------|------|--------|-------------|---------|
-| Wire Format | 134 ns | 488 B | 5 | **baseline** |
-| Unmarshal + Remarshal | 133 μs | 281 KB | 7,742 | **997x slower** |
-
-**Result:** Wire format splitting is **~1000x faster** with **99.8% fewer allocations**.
-
-### Traces
-
-| Method | Time | Memory | Allocations | Speedup |
-|--------|------|--------|-------------|---------|
-| Wire Format | 136 ns | 488 B | 5 | **baseline** |
-| Unmarshal + Remarshal | 169 μs | 432 KB | 7,192 | **1242x slower** |
-
-**Result:** Wire format splitting is **~1200x faster** with **99.9% fewer allocations**.
-
-### Logs
-
-| Method | Time | Memory | Allocations | Speedup |
-|--------|------|--------|-------------|---------|
-| Wire Format | 134 ns | 488 B | 5 | **baseline** |
-| Unmarshal + Remarshal | 175 μs | 386 KB | 8,692 | **1302x slower** |
-
-**Result:** Wire format splitting is **~1300x faster** with **99.9% fewer allocations**.
+Speedup: 49.2x faster, zero allocations
 
 ---
 
-## Summary
+## Iterator Operations
+
+### Metrics - ResourceMetrics()
+
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format Iterator | 56.4 ns | 24 B | 2 |
+| Unmarshal + Iterate | 158.2 μs | 143 KB | 5,161 |
+
+Speedup: 2,805x faster (iteration only)
+
+### Traces - ResourceSpans()
+
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format Iterator | 60.7 ns | 24 B | 2 |
+| Unmarshal + Iterate | 100.5 μs | 217 KB | 5,131 |
+
+Speedup: 1,655x faster (iteration only)
+
+### Logs - ResourceLogs()
+
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format Iterator | 93.3 ns | 24 B | 2 |
+| Unmarshal + Iterate | 106.0 μs | 198 KB | 6,131 |
+
+Speedup: 1,136x faster (iteration only)
+
+**Note:** The 2 allocations (24 bytes) are from the iterator error handling pattern (closure capture mechanism).
+
+---
+
+## Split Operations (Iterate + WriteTo)
+
+### Metrics
+
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format Split | 50.1 ns | 24 B | 2 |
+| Unmarshal + Remarshal | 143.2 μs | 281 KB | 7,742 |
+
+Speedup: 2,858x faster
+
+### Traces
+
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format Split | 51.2 ns | 24 B | 2 |
+| Unmarshal + Remarshal | 191.9 μs | 432 KB | 7,192 |
+
+Speedup: 3,748x faster
+
+### Logs
+
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format Split | 51.0 ns | 24 B | 2 |
+| Unmarshal + Remarshal | 178.2 μs | 386 KB | 8,692 |
+
+Speedup: 3,494x faster
+
+---
+
+## Resource Extraction
+
+### Metrics - Resource()
+
+| Method | Time | Memory | Allocations |
+|--------|------|--------|-------------|
+| Wire Format | 113.6 ns | 24 B | 2 |
+| Unmarshal | 99.9 μs | 143 KB | 5,161 |
+
+Speedup: 879x faster
+
+---
+
+## Implementation Details
 
 ### Counting Performance
 
-- **35-52x faster** than unmarshaling
-- **Zero allocations** vs thousands
-- **Zero memory** usage vs 140-220 KB
+Wire format counting avoids:
+- Unmarshaling protobuf to Go structs
+- Allocating memory for intermediate objects
+- Creating thousands of struct instances (ResourceMetrics, ScopeMetrics, Metric, DataPoint objects)
+- Allocating maps for attributes at each level
+- Garbage collector pressure from short-lived objects
 
-**Use case:** Perfect for rate limiting, telemetry, monitoring.
+The implementation reads protobuf tags directly and counts occurrences without full deserialization.
 
-### Splitting Performance
+**GC Impact:** Unmarshaling a 500-datapoint batch creates 5,000+ objects. Wire format creates zero objects for counting.
 
-- **~1000x faster** than unmarshal+remarshal
-- **99.8-99.9% fewer allocations**
-- **<1 KB memory** vs 280-430 KB
+### Iterator Performance
 
-**Use case:** Perfect for sharding, routing, parallel processing.
+Wire format iteration provides:
+- Direct byte slice references (zero-copy)
+- Minimal heap allocations (2 per batch for error handling)
+- Early exit capability when processing subset of data
+- No garbage collector pressure from OTLP object allocation
+
+The 2 allocations per iterator are from Go's closure capture mechanism for error handling.
+
+**GC Impact:** Unmarshaling creates the full OTLP object graph (5,000+ objects per batch). Wire format iteration creates 2 small objects (24 bytes total) for error handling.
+
+### Split Performance
+
+Wire format splitting combines iteration with WriteTo:
+- Iteration: ~50-60 ns (2 allocs)
+- WriteTo adds tag/length prefix (no additional allocations)
+- Total: ~50 ns per resource batch
 
 ---
 
-## Why Is It So Fast?
+## Use Cases
 
-1. **No Unmarshaling** - Reads wire format tags directly
-2. **Zero Allocations** - Counting requires no memory allocation
-3. **Minimal Allocations** - Splitting only allocates slice storage
-4. **No Struct Creation** - Skips creating thousands of Go objects
-5. **Early Exit** - Stops parsing once count/split is complete
+### Counting
+Suitable for edge ingester services:
+- Monitoring ingestion volume
+- Observability metrics about incoming batches
+- Batch size validation
+
+### Iteration
+Suitable for edge ingester services:
+- Sharding batches across workers
+- Per-resource routing decisions
+- Parallel processing pipelines
+
+### Resource Extraction
+Suitable for edge ingester services:
+- Service-based routing
+- Metadata extraction for routing decisions
+- Resource attribute hashing for load balancing
 
 ---
 
-## Real-World Impact
+## Theoretical CPU Impact
 
-### Rate Limiting 10,000 req/s
+**Disclaimer:** The following calculations extrapolate benchmark results to theoretical workloads. Actual production performance depends on many factors including network I/O, disk access, and system architecture.
 
-**Traditional Approach:**
-- Counting: 77 μs × 10,000 = 770 ms CPU time/second
-- **CPU usage: 77%** (single core)
+### Counting Operations at 10,000 req/s
 
-**Wire Format Approach:**
-- Counting: 2.2 μs × 10,000 = 22 ms CPU time/second
-- **CPU usage: 2.2%** (single core)
+**Unmarshal approach:**
+- 81 μs × 10,000 = 810 ms CPU/second
+- Single-core CPU usage: 81%
 
-**Savings:** **75% less CPU usage**
+**Wire format approach:**
+- 2.3 μs × 10,000 = 23 ms CPU/second
+- Single-core CPU usage: 2.3%
 
-### Sharding 10,000 req/s
+Difference: 787 ms CPU/second saved
 
-**Traditional Approach:**
-- Splitting: 133 μs × 10,000 = 1,330 ms CPU time/second
-- **CPU usage: 133%** (requires 2 cores)
+### Sharding at 10,000 req/s
 
-**Wire Format Approach:**
-- Splitting: 0.134 μs × 10,000 = 1.34 ms CPU time/second
-- **CPU usage: 0.13%** (single core)
+**Unmarshal + remarshal approach:**
+- 143 μs × 10,000 = 1,430 ms CPU/second
+- Multi-core CPU usage: >100% (requires multiple cores)
 
-**Savings:** **99.9% less CPU usage**
+**Wire format approach:**
+- 50 ns × 10,000 = 0.5 ms CPU/second
+- Single-core CPU usage: 0.05%
+
+Difference: 1,429 ms CPU/second saved
 
 ---
 
@@ -132,14 +208,14 @@ Comparison of otlp-wire operations vs traditional unmarshal/marshal approaches.
 To reproduce these results:
 
 ```bash
-# Run all benchmarks
+# Run all comparison benchmarks
+go test -bench='Count|Iterator|Split|ResourceExtraction' -benchmem
+
+# Run specific signal type
+go test -bench='BenchmarkMetrics' -benchmem
+
+# Extended run for more stable results
 go test -bench=. -benchmem -benchtime=3s
-
-# Run comparison benchmarks only
-go test -bench='Count|Split' -benchmem -benchtime=3s
-
-# Save results to file
-go test -bench=. -benchmem -benchtime=3s > benchmark_results.txt
 ```
 
 ---
@@ -148,10 +224,10 @@ go test -bench=. -benchmem -benchtime=3s > benchmark_results.txt
 
 All benchmarks use realistic OTLP data:
 
-- **5 resources** with full resource attributes
-- **100 data points** per resource (500 total)
+- 5 resources with full resource attributes
+- 100 data points/spans/logs per resource (500 total)
 - Full scope information (instrumentation library)
 - Complete metadata (timestamps, attributes)
 - Realistic attribute cardinality
 
-This represents typical production telemetry data.
+This represents typical production telemetry batch sizes.
