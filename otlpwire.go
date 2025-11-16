@@ -3,6 +3,7 @@ package otlpwire
 
 import (
 	"errors"
+	"io"
 	"iter"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -54,14 +55,14 @@ func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics
 }
 
 // Resource returns the raw Resource message bytes.
-func (r ResourceMetrics) Resource() []byte {
-	resourceBytes, _ := extractResourceFromResourceMetrics([]byte(r))
-	return resourceBytes
+func (r ResourceMetrics) Resource() ([]byte, error) {
+	return extractResourceMessage([]byte(r))
 }
 
-// AsExportRequest wraps the ResourceMetrics into a valid ExportMetricsServiceRequest.
-func (r ResourceMetrics) AsExportRequest() []byte {
-	return wrapResourceMetrics([]byte(r))
+// WriteTo writes the ResourceMetrics as a valid ExportMetricsServiceRequest to w.
+// Implements io.WriterTo interface.
+func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error) {
+	return writeResourceMessage(w, []byte(r))
 }
 
 // LogRecordCount returns the total number of log records in the batch.
@@ -92,14 +93,14 @@ func (l ExportLogsServiceRequest) ResourceLogs() (iter.Seq[ResourceLogs], func()
 }
 
 // Resource returns the raw Resource message bytes.
-func (r ResourceLogs) Resource() []byte {
-	resourceBytes, _ := extractResourceFromResourceLogs([]byte(r))
-	return resourceBytes
+func (r ResourceLogs) Resource() ([]byte, error) {
+	return extractResourceMessage([]byte(r))
 }
 
-// AsExportRequest wraps the ResourceLogs into a valid ExportLogsServiceRequest.
-func (r ResourceLogs) AsExportRequest() []byte {
-	return wrapResourceLogs([]byte(r))
+// WriteTo writes the ResourceLogs as a valid ExportLogsServiceRequest to w.
+// Implements io.WriterTo interface.
+func (r ResourceLogs) WriteTo(w io.Writer) (int64, error) {
+	return writeResourceMessage(w, []byte(r))
 }
 
 // SpanCount returns the total number of spans in the batch.
@@ -130,14 +131,14 @@ func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], fu
 }
 
 // Resource returns the raw Resource message bytes.
-func (r ResourceSpans) Resource() []byte {
-	resourceBytes, _ := extractResourceFromResourceSpans([]byte(r))
-	return resourceBytes
+func (r ResourceSpans) Resource() ([]byte, error) {
+	return extractResourceMessage([]byte(r))
 }
 
-// AsExportRequest wraps the ResourceSpans into a valid ExportTracesServiceRequest.
-func (r ResourceSpans) AsExportRequest() []byte {
-	return wrapResourceSpans([]byte(r))
+// WriteTo writes the ResourceSpans as a valid ExportTracesServiceRequest to w.
+// Implements io.WriterTo interface.
+func (r ResourceSpans) WriteTo(w io.Writer) (int64, error) {
+	return writeResourceMessage(w, []byte(r))
 }
 
 // countMetricDataPoints counts the number of metric data points in an OTLP
@@ -152,39 +153,7 @@ func (r ResourceSpans) AsExportRequest() []byte {
 //	              └─ field 5: Gauge | field 7: Sum | field 9: Histogram | etc.
 //	                  └─ field 1: DataPoints[] (repeated message) ← count these
 func countMetricDataPoints(data []byte) (int, error) {
-	count := 0
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ExportMetricsServiceRequest")
-		}
-		pos += tagLen
-
-		// Field 1 = ResourceMetrics (repeated message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return 0, errors.New("invalid bytes in ResourceMetrics")
-			}
-			pos += n
-
-			c, err := countInResourceMetrics(msgBytes)
-			if err != nil {
-				return 0, err
-			}
-			count += c
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				return 0, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return count, nil
+	return countRepeatedField(data, 1, countInResourceMetrics)
 }
 
 // countLogRecords counts the number of log records in an OTLP
@@ -197,39 +166,7 @@ func countMetricDataPoints(data []byte) (int, error) {
 //	      └─ field 2: ScopeLogs[] (repeated message)
 //	          └─ field 2: LogRecord[] (repeated message) ← count these
 func countLogRecords(data []byte) (int, error) {
-	count := 0
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ExportLogsServiceRequest")
-		}
-		pos += tagLen
-
-		// Field 1 = ResourceLogs (repeated message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return 0, errors.New("invalid bytes in ResourceLogs")
-			}
-			pos += n
-
-			c, err := countInResourceLogs(msgBytes)
-			if err != nil {
-				return 0, err
-			}
-			count += c
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				return 0, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return count, nil
+	return countRepeatedField(data, 1, countInResourceLogs)
 }
 
 // countSpans counts the number of spans in an OTLP
@@ -242,132 +179,31 @@ func countLogRecords(data []byte) (int, error) {
 //	      └─ field 2: ScopeSpans[] (repeated message)
 //	          └─ field 2: Span[] (repeated message) ← count these
 func countSpans(data []byte) (int, error) {
-	count := 0
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ExportTracesServiceRequest")
-		}
-		pos += tagLen
-
-		// Field 1 = ResourceSpans (repeated message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return 0, errors.New("invalid bytes in ResourceSpans")
-			}
-			pos += n
-
-			c, err := countInResourceSpans(msgBytes)
-			if err != nil {
-				return 0, err
-			}
-			count += c
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				return 0, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return count, nil
-}
-
-// skipField skips a field based on its wire type.
-// Returns the number of bytes skipped. Returns negative value on error.
-func skipField(data []byte, wireType protowire.Type) int {
-	switch wireType {
-	case protowire.VarintType:
-		_, n := protowire.ConsumeVarint(data)
-		return n
-	case protowire.Fixed64Type:
-		_, n := protowire.ConsumeFixed64(data)
-		return n
-	case protowire.BytesType:
-		_, n := protowire.ConsumeBytes(data)
-		return n
-	case protowire.Fixed32Type:
-		_, n := protowire.ConsumeFixed32(data)
-		return n
-	default:
-		return -1
-	}
+	return countRepeatedField(data, 1, countInResourceSpans)
 }
 
 func countInResourceMetrics(data []byte) (int, error) {
-	count := 0
-	pos := 0
+	return countRepeatedField(data, 2, countInScopeMetrics)
+}
 
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ResourceMetrics")
-		}
-		pos += tagLen
+func countInResourceLogs(data []byte) (int, error) {
+	return countRepeatedField(data, 2, countInScopeLogs)
+}
 
-		// Field 2 = ScopeMetrics (repeated message)
-		if fieldNum == 2 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return 0, errors.New("invalid bytes in ScopeMetrics")
-			}
-			pos += n
-
-			c, err := countInScopeMetrics(msgBytes)
-			if err != nil {
-				return 0, err
-			}
-			count += c
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				return 0, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return count, nil
+func countInResourceSpans(data []byte) (int, error) {
+	return countRepeatedField(data, 2, countInScopeSpans)
 }
 
 func countInScopeMetrics(data []byte) (int, error) {
-	count := 0
-	pos := 0
+	return countRepeatedField(data, 2, countInMetric)
+}
 
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ScopeMetrics")
-		}
-		pos += tagLen
+func countInScopeLogs(data []byte) (int, error) {
+	return countOccurrences(data, 2)
+}
 
-		// Field 2 = Metrics (repeated message)
-		if fieldNum == 2 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return 0, errors.New("invalid bytes in Metrics")
-			}
-			pos += n
-
-			c, err := countInMetric(msgBytes)
-			if err != nil {
-				return 0, err
-			}
-			count += c
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				return 0, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return count, nil
+func countInScopeSpans(data []byte) (int, error) {
+	return countOccurrences(data, 2)
 }
 
 func countInMetric(data []byte) (int, error) {
@@ -377,7 +213,7 @@ func countInMetric(data []byte) (int, error) {
 	for pos < len(data) {
 		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in Metric")
+			return 0, errors.New("malformed protobuf tag in metric")
 		}
 		pos += tagLen
 
@@ -407,58 +243,51 @@ func countInMetric(data []byte) (int, error) {
 }
 
 func countDataPoints(data []byte) (int, error) {
-	count := 0
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in metric data points")
-		}
-		pos += tagLen
-
-		// Field 1 = DataPoints (repeated message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return 0, errors.New("invalid bytes in DataPoints")
-			}
-			pos += n
-
-			count++      // Each occurrence of field 1 is one data point
-			_ = msgBytes // Skip the data point content
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				return 0, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return count, nil
+	return countOccurrences(data, 1)
 }
 
-func countInResourceLogs(data []byte) (int, error) {
+// skipField skips a field based on its wire type.
+// Returns the number of bytes skipped. Returns negative value on error.
+func skipField(data []byte, wireType protowire.Type) int {
+	switch wireType {
+	case protowire.VarintType:
+		_, n := protowire.ConsumeVarint(data)
+		return n
+	case protowire.Fixed64Type:
+		_, n := protowire.ConsumeFixed64(data)
+		return n
+	case protowire.BytesType:
+		_, n := protowire.ConsumeBytes(data)
+		return n
+	case protowire.Fixed32Type:
+		_, n := protowire.ConsumeFixed32(data)
+		return n
+	default:
+		return -1
+	}
+}
+
+// countRepeatedField counts items in a repeated field by delegating to countFunc
+// for each occurrence of the specified field.
+func countRepeatedField(data []byte, fieldNum protowire.Number, countFunc func([]byte) (int, error)) (int, error) {
 	count := 0
 	pos := 0
 
 	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ResourceLogs")
+			return 0, errors.New("malformed protobuf tag")
 		}
 		pos += tagLen
 
-		// Field 2 = ScopeLogs (repeated message)
-		if fieldNum == 2 && wireType == protowire.BytesType {
+		if num == fieldNum && wireType == protowire.BytesType {
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid bytes in ScopeLogs")
+				return 0, errors.New("invalid bytes in repeated field")
 			}
 			pos += n
 
-			c, err := countInScopeLogs(msgBytes)
+			c, err := countFunc(msgBytes)
 			if err != nil {
 				return 0, err
 			}
@@ -475,27 +304,25 @@ func countInResourceLogs(data []byte) (int, error) {
 	return count, nil
 }
 
-func countInScopeLogs(data []byte) (int, error) {
+// countOccurrences counts direct occurrences of a specific field.
+func countOccurrences(data []byte, fieldNum protowire.Number) (int, error) {
 	count := 0
 	pos := 0
 
 	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ScopeLogs")
+			return 0, errors.New("malformed protobuf tag")
 		}
 		pos += tagLen
 
-		// Field 2 = LogRecords (repeated message)
-		if fieldNum == 2 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
+		if num == fieldNum && wireType == protowire.BytesType {
+			_, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid bytes in LogRecords")
+				return 0, errors.New("invalid bytes in field")
 			}
 			pos += n
-
-			count++      // Each occurrence is one log record
-			_ = msgBytes // Skip the log record content
+			count++
 		} else {
 			n := skipField(data[pos:], wireType)
 			if n < 0 {
@@ -508,288 +335,79 @@ func countInScopeLogs(data []byte) (int, error) {
 	return count, nil
 }
 
-func countInResourceSpans(data []byte) (int, error) {
-	count := 0
+// forEachRepeatedField iterates over a repeated field, calling fn for each occurrence.
+// The callback receives field bytes or an error. Return false to stop iteration.
+func forEachRepeatedField(data []byte, fieldNum protowire.Number, fn func([]byte, error) bool) {
 	pos := 0
 
 	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ResourceSpans")
+			fn(nil, errors.New("malformed protobuf tag"))
+			return
 		}
 		pos += tagLen
 
-		// Field 2 = ScopeSpans (repeated message)
-		if fieldNum == 2 && wireType == protowire.BytesType {
+		if num == fieldNum && wireType == protowire.BytesType {
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid bytes in ScopeSpans")
+				fn(nil, errors.New("invalid bytes in repeated field"))
+				return
 			}
 			pos += n
 
-			c, err := countInScopeSpans(msgBytes)
-			if err != nil {
-				return 0, err
+			if !fn(msgBytes, nil) {
+				return
 			}
-			count += c
 		} else {
 			n := skipField(data[pos:], wireType)
 			if n < 0 {
-				return 0, errors.New("failed to skip field")
+				fn(nil, errors.New("failed to skip field"))
+				return
 			}
 			pos += n
 		}
 	}
-
-	return count, nil
-}
-
-func countInScopeSpans(data []byte) (int, error) {
-	count := 0
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag in ScopeSpans")
-		}
-		pos += tagLen
-
-		// Field 2 = Spans (repeated message)
-		if fieldNum == 2 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return 0, errors.New("invalid bytes in Spans")
-			}
-			pos += n
-
-			count++      // Each occurrence is one span
-			_ = msgBytes // Skip the span content
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				return 0, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return count, nil
 }
 
 // forEachResourceMetrics iterates over ResourceMetrics messages, calling fn for each.
 // The callback receives resource bytes or an error. Return false to stop iteration.
 func forEachResourceMetrics(data []byte, fn func([]byte, error) bool) {
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			fn(nil, errors.New("malformed protobuf tag in ExportMetricsServiceRequest"))
-			return
-		}
-		pos += tagLen
-
-		// Field 1 = ResourceMetrics (repeated message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				fn(nil, errors.New("invalid bytes in ResourceMetrics"))
-				return
-			}
-			pos += n
-
-			if !fn(msgBytes, nil) {
-				return
-			}
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				fn(nil, errors.New("failed to skip field"))
-				return
-			}
-			pos += n
-		}
-	}
+	forEachRepeatedField(data, 1, fn)
 }
 
 // forEachResourceLogs iterates over ResourceLogs messages, calling fn for each.
 // The callback receives resource bytes or an error. Return false to stop iteration.
 func forEachResourceLogs(data []byte, fn func([]byte, error) bool) {
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			fn(nil, errors.New("malformed protobuf tag in ExportLogsServiceRequest"))
-			return
-		}
-		pos += tagLen
-
-		// Field 1 = ResourceLogs (repeated message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				fn(nil, errors.New("invalid bytes in ResourceLogs"))
-				return
-			}
-			pos += n
-
-			if !fn(msgBytes, nil) {
-				return
-			}
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				fn(nil, errors.New("failed to skip field"))
-				return
-			}
-			pos += n
-		}
-	}
+	forEachRepeatedField(data, 1, fn)
 }
 
 // forEachResourceSpans iterates over ResourceSpans messages, calling fn for each.
 // The callback receives resource bytes or an error. Return false to stop iteration.
 func forEachResourceSpans(data []byte, fn func([]byte, error) bool) {
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			fn(nil, errors.New("malformed protobuf tag in ExportTracesServiceRequest"))
-			return
-		}
-		pos += tagLen
-
-		// Field 1 = ResourceSpans (repeated message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				fn(nil, errors.New("invalid bytes in ResourceSpans"))
-				return
-			}
-			pos += n
-
-			if !fn(msgBytes, nil) {
-				return
-			}
-		} else {
-			n := skipField(data[pos:], wireType)
-			if n < 0 {
-				fn(nil, errors.New("failed to skip field"))
-				return
-			}
-			pos += n
-		}
-	}
-}
-
-// wrapResourceMetrics wraps a ResourceMetrics message bytes into a new
-// ExportMetricsServiceRequest protobuf message.
-//
-// Wire format structure:
-//
-//	ExportMetricsServiceRequest
-//	  └─ field 1: ResourceMetrics (message)
-func wrapResourceMetrics(resourceMetricsBytes []byte) []byte {
-	// Calculate total size needed
-	tagSize := protowire.SizeTag(1) // field 1, wire type 2
-	lengthSize := protowire.SizeBytes(len(resourceMetricsBytes))
-	totalSize := tagSize + lengthSize
-
-	// Allocate buffer
-	buf := make([]byte, 0, totalSize)
-
-	// Encode: field 1 (ResourceMetrics), wire type 2 (length-delimited)
-	buf = protowire.AppendTag(buf, 1, protowire.BytesType)
-
-	// Encode the ResourceMetrics bytes
-	buf = protowire.AppendBytes(buf, resourceMetricsBytes)
-
-	return buf
-}
-
-// wrapResourceLogs wraps a ResourceLogs message bytes into a new
-// ExportLogsServiceRequest protobuf message.
-func wrapResourceLogs(resourceLogsBytes []byte) []byte {
-	// Calculate total size needed
-	tagSize := protowire.SizeTag(1)
-	lengthSize := protowire.SizeBytes(len(resourceLogsBytes))
-	totalSize := tagSize + lengthSize
-
-	// Allocate buffer
-	buf := make([]byte, 0, totalSize)
-
-	// Encode: field 1 (ResourceLogs), wire type 2 (length-delimited)
-	buf = protowire.AppendTag(buf, 1, protowire.BytesType)
-
-	// Encode the ResourceLogs bytes
-	buf = protowire.AppendBytes(buf, resourceLogsBytes)
-
-	return buf
-}
-
-// wrapResourceSpans wraps a ResourceSpans message bytes into a new
-// ExportTracesServiceRequest protobuf message.
-func wrapResourceSpans(resourceSpansBytes []byte) []byte {
-	// Calculate total size needed
-	tagSize := protowire.SizeTag(1)
-	lengthSize := protowire.SizeBytes(len(resourceSpansBytes))
-	totalSize := tagSize + lengthSize
-
-	// Allocate buffer
-	buf := make([]byte, 0, totalSize)
-
-	// Encode: field 1 (ResourceSpans), wire type 2 (length-delimited)
-	buf = protowire.AppendTag(buf, 1, protowire.BytesType)
-
-	// Encode the ResourceSpans bytes
-	buf = protowire.AppendBytes(buf, resourceSpansBytes)
-
-	return buf
-}
-
-// extractResourceFromResourceMetrics extracts the Resource message bytes
-// from a ResourceMetrics message. The Resource is field 1.
-//
-// Wire format structure:
-//
-//	ResourceMetrics
-//	  └─ field 1: Resource (message)
-func extractResourceFromResourceMetrics(data []byte) ([]byte, error) {
-	return extractResourceMessage(data, "ResourceMetrics")
-}
-
-// extractResourceFromResourceLogs extracts the Resource message bytes
-// from a ResourceLogs message. The Resource is field 1.
-func extractResourceFromResourceLogs(data []byte) ([]byte, error) {
-	return extractResourceMessage(data, "ResourceLogs")
-}
-
-// extractResourceFromResourceSpans extracts the Resource message bytes
-// from a ResourceSpans message. The Resource is field 1.
-func extractResourceFromResourceSpans(data []byte) ([]byte, error) {
-	return extractResourceMessage(data, "ResourceSpans")
+	forEachRepeatedField(data, 1, fn)
 }
 
 // extractResourceMessage extracts the Resource message (field 1) from
 // ResourceMetrics/ResourceLogs/ResourceSpans messages.
-func extractResourceMessage(data []byte, messageType string) ([]byte, error) {
+func extractResourceMessage(data []byte) ([]byte, error) {
 	pos := 0
 
 	for pos < len(data) {
 		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return nil, errors.New("malformed protobuf tag in " + messageType)
+			return nil, errors.New("malformed protobuf tag")
 		}
 		pos += tagLen
 
 		// Field 1 = Resource (message)
-		if fieldNum == 1 && wireType == protowire.BytesType {
+		if fieldNum == 1 {
+			if wireType != protowire.BytesType {
+				return nil, errors.New("resource field has wrong wire type")
+			}
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return nil, errors.New("invalid bytes in Resource")
+				return nil, errors.New("invalid bytes in resource field")
 			}
 			return msgBytes, nil
 		}
@@ -797,11 +415,26 @@ func extractResourceMessage(data []byte, messageType string) ([]byte, error) {
 		// Skip other fields
 		n := skipField(data[pos:], wireType)
 		if n < 0 {
-			return nil, errors.New("failed to skip field in " + messageType)
+			return nil, errors.New("failed to skip field")
 		}
 		pos += n
 	}
 
-	// Resource field not found - return empty bytes (resource might be optional)
-	return []byte{}, nil
+	return nil, errors.New("resource field not found")
+}
+
+// writeResourceMessage writes resource data as a valid OTLP export request message.
+// Wraps the resource bytes with field tag 1 and length prefix.
+func writeResourceMessage(w io.Writer, data []byte) (int64, error) {
+	buf := make([]byte, 0, 11) // tag + length varint
+	buf = protowire.AppendTag(buf, 1, protowire.BytesType)
+	buf = protowire.AppendVarint(buf, uint64(len(data)))
+
+	n1, err := w.Write(buf)
+	if err != nil {
+		return int64(n1), err
+	}
+
+	n2, err := w.Write(data)
+	return int64(n1 + n2), err
 }
