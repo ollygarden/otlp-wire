@@ -1,6 +1,7 @@
 package otlpwire_test
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 
@@ -44,11 +45,13 @@ func Example_shardingByService() {
 	i := 0
 	for resource := range resources {
 		// Hash resource for consistent routing
-		hash := hashBytes(resource.Resource())
+		resourceBytes, _ := resource.Resource()
+		hash := hashBytes(resourceBytes)
 		workerID := hash % uint64(numWorkers)
 
-		exportBytes := resource.AsExportRequest()
-		count, _ := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
+		var buf bytes.Buffer
+		resource.WriteTo(&buf)
+		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
 
 		fmt.Printf("Resource %d → Worker %d (%d data points)\n", i, workerID, count)
 		i++
@@ -75,8 +78,9 @@ func Example_perServiceRateLimiting() {
 	resources, getErr := data.ResourceMetrics()
 	for resource := range resources {
 		// Count signals in this resource
-		exportBytes := resource.AsExportRequest()
-		count, _ := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
+		var buf bytes.Buffer
+		resource.WriteTo(&buf)
+		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
 
 		if count > serviceLimit {
 			fmt.Printf("Resource rejected: %d data points (limit: %d)\n", count, serviceLimit)
@@ -107,11 +111,13 @@ func Example_iteratorSharding() {
 	resources, getErr := data.ResourceMetrics()
 	for resource := range resources {
 		// Hash resource for consistent routing
-		hash := hashBytes(resource.Resource())
+		resourceBytes, _ := resource.Resource()
+		hash := hashBytes(resourceBytes)
 		workerID := hash % uint64(numWorkers)
 
-		exportBytes := resource.AsExportRequest()
-		count, _ := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
+		var buf bytes.Buffer
+		resource.WriteTo(&buf)
+		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
 
 		fmt.Printf("Worker %d: %d data points\n", workerID, count)
 	}
@@ -138,8 +144,9 @@ func Example_iteratorEarlyExit() {
 	totalProcessed := 0
 	resources, getErr := data.ResourceMetrics()
 	for resource := range resources {
-		exportBytes := resource.AsExportRequest()
-		count, _ := otlpwire.ExportMetricsServiceRequest(exportBytes).DataPointCount()
+		var buf bytes.Buffer
+		resource.WriteTo(&buf)
+		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
 
 		if totalProcessed+count > limit {
 			fmt.Printf("Rate limit reached, skipping remaining resources\n")
@@ -174,11 +181,12 @@ func Example_typeComposition() {
 	resources, getErr := batch.ResourceMetrics()
 	for resource := range resources {
 		if resourceCount == 0 {
-			// AsExportRequest returns []byte (valid OTLP message)
-			exportBytes := resource.AsExportRequest()
+			// WriteTo writes valid OTLP message
+			var buf bytes.Buffer
+			resource.WriteTo(&buf)
 
 			// Cast back to MetricsData to count this resource only
-			singleResourceBatch := otlpwire.ExportMetricsServiceRequest(exportBytes)
+			singleResourceBatch := otlpwire.ExportMetricsServiceRequest(buf.Bytes())
 			dpCount, _ := singleResourceBatch.DataPointCount()
 			fmt.Printf("Resource 0 data points: %d\n", dpCount)
 		}
