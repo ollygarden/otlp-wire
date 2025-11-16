@@ -22,7 +22,7 @@ func BenchmarkMetrics_Count_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = metricsData.DataPointCount()
+		_, _ = metricsData.DataPointCount()
 	}
 }
 
@@ -82,8 +82,10 @@ func BenchmarkMetrics_Split_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		splits := metricsData.SplitByResource()
-		_ = splits
+		resources, getErr := metricsData.ResourceMetrics()
+		for range resources {
+		}
+		_ = getErr()
 	}
 }
 
@@ -132,7 +134,7 @@ func BenchmarkTraces_Count_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = tracesData.SpanCount()
+		_, _ = tracesData.SpanCount()
 	}
 }
 
@@ -178,8 +180,10 @@ func BenchmarkTraces_Split_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		splits := tracesData.SplitByResource()
-		_ = splits
+		resources, getErr := tracesData.ResourceSpans()
+		for range resources {
+		}
+		_ = getErr()
 	}
 }
 
@@ -228,7 +232,7 @@ func BenchmarkLogs_Count_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = logsData.LogRecordCount()
+		_, _ = logsData.LogRecordCount()
 	}
 }
 
@@ -274,8 +278,10 @@ func BenchmarkLogs_Split_WireFormat(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		splits := logsData.SplitByResource()
-		_ = splits
+		resources, getErr := logsData.ResourceLogs()
+		for range resources {
+		}
+		_ = getErr()
 	}
 }
 

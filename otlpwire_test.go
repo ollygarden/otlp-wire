@@ -115,7 +115,8 @@ func TestExportMetricsServiceRequest_Count(t *testing.T) {
 			require.NoError(t, err)
 
 			metricsData := ExportMetricsServiceRequest(data)
-			count := metricsData.DataPointCount()
+			count, err := metricsData.DataPointCount()
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
@@ -171,23 +172,23 @@ func TestExportMetricsServiceRequest_SplitByResource(t *testing.T) {
 
 			// Verify original count
 			metricsData := ExportMetricsServiceRequest(data)
-			originalCount := metricsData.DataPointCount()
+			originalCount, err := metricsData.DataPointCount()
+			require.NoError(t, err)
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
 				expectedTotal += c
 			}
 			assert.Equal(t, expectedTotal, originalCount)
 
-			// Split by resource
-			splits := metricsData.SplitByResource()
-			assert.Len(t, splits, len(tt.resourceCounts))
-
-			// Verify each split
+			// Iterate over resources
 			totalFromSplits := 0
-			for i, resource := range splits {
+			i := 0
+			resources, getErr := metricsData.ResourceMetrics()
+			for resource := range resources {
 				// Count using AsExportRequest + cast back to MetricsData
 				exportBytes := resource.AsExportRequest()
-				count := ExportMetricsServiceRequest(exportBytes).DataPointCount()
+				count, err := ExportMetricsServiceRequest(exportBytes).DataPointCount()
+				require.NoError(t, err)
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -199,7 +200,13 @@ func TestExportMetricsServiceRequest_SplitByResource(t *testing.T) {
 
 				// Verify Resource() returns bytes
 				assert.NotEmpty(t, resource.Resource())
+
+				i++
 			}
+			require.NoError(t, getErr())
+
+			// Verify we processed the expected number of resources
+			assert.Equal(t, len(tt.resourceCounts), i)
 
 			// Verify total count is preserved
 			assert.Equal(t, originalCount, totalFromSplits)
@@ -214,8 +221,13 @@ func TestExportMetricsServiceRequest_SplitByResource_EmptyData(t *testing.T) {
 	require.NoError(t, err)
 
 	metricsData := ExportMetricsServiceRequest(data)
-	splits := metricsData.SplitByResource()
-	assert.Empty(t, splits)
+	count := 0
+	resources, getErr := metricsData.ResourceMetrics()
+	for range resources {
+		count++
+	}
+	require.NoError(t, getErr())
+	assert.Equal(t, 0, count)
 }
 
 // ========== ExportLogsServiceRequest Tests ==========
@@ -292,7 +304,8 @@ func TestExportLogsServiceRequest_Count(t *testing.T) {
 			require.NoError(t, err)
 
 			logsData := ExportLogsServiceRequest(data)
-			count := logsData.LogRecordCount()
+			count, err := logsData.LogRecordCount()
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
@@ -341,22 +354,22 @@ func TestExportLogsServiceRequest_SplitByResource(t *testing.T) {
 
 			// Verify original count
 			logsData := ExportLogsServiceRequest(data)
-			originalCount := logsData.LogRecordCount()
+			originalCount, err := logsData.LogRecordCount()
+			require.NoError(t, err)
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
 				expectedTotal += c
 			}
 			assert.Equal(t, expectedTotal, originalCount)
 
-			// Split by resource
-			splits := logsData.SplitByResource()
-			assert.Len(t, splits, len(tt.resourceCounts))
-
-			// Verify each split
+			// Iterate over resources
 			totalFromSplits := 0
-			for i, resource := range splits {
+			i := 0
+			resources, getErr := logsData.ResourceLogs()
+			for resource := range resources {
 				exportBytes := resource.AsExportRequest()
-				count := ExportLogsServiceRequest(exportBytes).LogRecordCount()
+				count, err := ExportLogsServiceRequest(exportBytes).LogRecordCount()
+				require.NoError(t, err)
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -368,7 +381,13 @@ func TestExportLogsServiceRequest_SplitByResource(t *testing.T) {
 
 				// Verify Resource() returns bytes
 				assert.NotEmpty(t, resource.Resource())
+
+				i++
 			}
+			require.NoError(t, getErr())
+
+			// Verify we processed the expected number of resources
+			assert.Equal(t, len(tt.resourceCounts), i)
 
 			// Verify total count is preserved
 			assert.Equal(t, originalCount, totalFromSplits)
@@ -450,7 +469,8 @@ func TestExportTracesServiceRequest_Count(t *testing.T) {
 			require.NoError(t, err)
 
 			tracesData := ExportTracesServiceRequest(data)
-			count := tracesData.SpanCount()
+			count, err := tracesData.SpanCount()
+			require.NoError(t, err)
 			assert.Equal(t, tt.expectedCount, count)
 		})
 	}
@@ -499,22 +519,22 @@ func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 
 			// Verify original count
 			tracesData := ExportTracesServiceRequest(data)
-			originalCount := tracesData.SpanCount()
+			originalCount, err := tracesData.SpanCount()
+			require.NoError(t, err)
 			expectedTotal := 0
 			for _, c := range tt.resourceCounts {
 				expectedTotal += c
 			}
 			assert.Equal(t, expectedTotal, originalCount)
 
-			// Split by resource
-			splits := tracesData.SplitByResource()
-			assert.Len(t, splits, len(tt.resourceCounts))
-
-			// Verify each split
+			// Iterate over resources
 			totalFromSplits := 0
-			for i, resource := range splits {
+			i := 0
+			resources, getErr := tracesData.ResourceSpans()
+			for resource := range resources {
 				exportBytes := resource.AsExportRequest()
-				count := ExportTracesServiceRequest(exportBytes).SpanCount()
+				count, err := ExportTracesServiceRequest(exportBytes).SpanCount()
+				require.NoError(t, err)
 				assert.Equal(t, tt.resourceCounts[i], count, "split %d should have correct count", i)
 				totalFromSplits += count
 
@@ -526,7 +546,13 @@ func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 
 				// Verify Resource() returns bytes
 				assert.NotEmpty(t, resource.Resource())
+
+				i++
 			}
+			require.NoError(t, getErr())
+
+			// Verify we processed the expected number of resources
+			assert.Equal(t, len(tt.resourceCounts), i)
 
 			// Verify total count is preserved
 			assert.Equal(t, originalCount, totalFromSplits)
@@ -558,15 +584,21 @@ func TestResourceMetrics_Resource(t *testing.T) {
 	data, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(t, err)
 
-	// Split and verify resources
+	// Iterate over resources and verify
 	metricsData := ExportMetricsServiceRequest(data)
-	splits := metricsData.SplitByResource()
-	require.Len(t, splits, 2)
+	var resources [][]byte
+	resourcesIter, getErr := metricsData.ResourceMetrics()
+	for resource := range resourcesIter {
+		resources = append(resources, resource.Resource())
+	}
+	require.NoError(t, getErr())
+
+	require.Len(t, resources, 2)
 
 	// Different resources should have different bytes
-	assert.NotEqual(t, splits[0].Resource(), splits[1].Resource())
-	assert.NotEmpty(t, splits[0].Resource())
-	assert.NotEmpty(t, splits[1].Resource())
+	assert.NotEqual(t, resources[0], resources[1])
+	assert.NotEmpty(t, resources[0])
+	assert.NotEmpty(t, resources[1])
 }
 
 func TestResourceMetrics_Resource_SameAttributes(t *testing.T) {
@@ -592,11 +624,17 @@ func TestResourceMetrics_Resource_SameAttributes(t *testing.T) {
 	require.NoError(t, err)
 
 	metricsData := ExportMetricsServiceRequest(data)
-	splits := metricsData.SplitByResource()
-	require.Len(t, splits, 2)
+	var resources [][]byte
+	resourcesIter, getErr := metricsData.ResourceMetrics()
+	for resource := range resourcesIter {
+		resources = append(resources, resource.Resource())
+	}
+	require.NoError(t, getErr())
+
+	require.Len(t, resources, 2)
 
 	// Same attributes should produce identical resource bytes
-	assert.Equal(t, splits[0].Resource(), splits[1].Resource())
+	assert.Equal(t, resources[0], resources[1])
 }
 
 // ========== Benchmarks ==========
@@ -625,7 +663,7 @@ func BenchmarkMetricsData_Count(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = metricsData.DataPointCount()
+		_, _ = metricsData.DataPointCount()
 	}
 }
 
@@ -655,7 +693,10 @@ func BenchmarkMetricsData_SplitByResource(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = metricsData.SplitByResource()
+		resources, getErr := metricsData.ResourceMetrics()
+		for range resources {
+		}
+		_ = getErr()
 	}
 }
 
@@ -678,10 +719,13 @@ func BenchmarkResourceMetrics_AsExportRequest(b *testing.B) {
 	require.NoError(b, err)
 
 	metricsData := ExportMetricsServiceRequest(data)
-	splits := metricsData.SplitByResource()
-	require.Len(b, splits, 1)
-
-	resource := splits[0]
+	var resource ResourceMetrics
+	resources, getErr := metricsData.ResourceMetrics()
+	for r := range resources {
+		resource = r
+		break
+	}
+	require.NoError(b, getErr())
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -710,7 +754,7 @@ func BenchmarkTracesData_Count(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = tracesData.SpanCount()
+		_, _ = tracesData.SpanCount()
 	}
 }
 
@@ -737,7 +781,10 @@ func BenchmarkTracesData_SplitByResource(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = tracesData.SplitByResource()
+		resources, getErr := tracesData.ResourceSpans()
+		for range resources {
+		}
+		_ = getErr()
 	}
 }
 
@@ -762,7 +809,7 @@ func BenchmarkLogsData_Count(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = logsData.LogRecordCount()
+		_, _ = logsData.LogRecordCount()
 	}
 }
 
@@ -789,6 +836,9 @@ func BenchmarkLogsData_SplitByResource(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = logsData.SplitByResource()
+		resources, getErr := logsData.ResourceLogs()
+		for range resources {
+		}
+		_ = getErr()
 	}
 }
