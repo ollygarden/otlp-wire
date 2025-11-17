@@ -1,6 +1,6 @@
 # otlp-wire
 
-OTLP wire format utilities for Go, designed for edge ingester services that need to count, shard, and route telemetry data without full unmarshaling overhead.
+OTLP wire format utilities for Go. Count, shard, and route telemetry data without unmarshaling.
 
 [![Go Reference](https://pkg.go.dev/badge/go.olly.garden/otlp-wire.svg)](https://pkg.go.dev/go.olly.garden/otlp-wire)
 [![Go Report Card](https://goreportcard.com/badge/go.olly.garden/otlp-wire)](https://goreportcard.com/report/go.olly.garden/otlp-wire)
@@ -13,12 +13,12 @@ OTLP wire format utilities for Go, designed for edge ingester services that need
 
 ## Performance Characteristics
 
-Edge ingester services receiving OTLP data often need to make routing decisions, enforce rate limits, or shard across workers without processing the full telemetry payload. Full protobuf unmarshaling is expensive for these operations:
-- Allocates thousands of Go objects (structs, slices, maps for attributes)
-- Creates significant garbage collector pressure
-- High CPU overhead parsing entire protobuf structure
+Full protobuf unmarshaling is expensive:
+- Allocates thousands of Go objects
+- High garbage collector pressure
+- High CPU overhead
 
-otlp-wire operates directly on wire format bytes:
+otlp-wire operates on wire format bytes:
 
 - 35-55x faster counting than unmarshaling (zero allocations)
 - 1,100-2,800x faster iteration than unmarshal+iterate (2 allocations)
@@ -26,15 +26,13 @@ otlp-wire operates directly on wire format bytes:
 - Minimal GC pressure (only 24 bytes per batch for error handling)
 - Zero dependencies (only stdlib + protowire)
 
-See [BENCHMARKS.md](BENCHMARKS.md) for detailed comparison.
+See [BENCHMARKS.md](docs/BENCHMARKS.md) for detailed comparison.
 
 ## Use Cases
 
-Designed for edge ingester services:
-
-- **Observability**: Count signals in batches for monitoring ingestion volume
-- **Sharding**: Split batches by resource for parallel processing across workers
-- **Routing**: Extract resource attributes to route batches to appropriate backends
+- **Observability**: Count signals for monitoring ingestion volume
+- **Sharding**: Split batches by resource for parallel processing
+- **Routing**: Extract resource attributes for routing decisions
 
 ## Installation
 
@@ -53,9 +51,7 @@ count, err := data.DataPointCount()
 if err != nil {
     return err
 }
-if count > limit {
-    return errors.New("rate limit exceeded")
-}
+metrics.RecordDataPointsReceived(count)
 
 // Iterate over resources for sharding
 resources, getErr := data.ResourceMetrics()
@@ -110,15 +106,22 @@ func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], fu
 **Resource-level operations:**
 ```go
 type ResourceMetrics []byte
+func (r ResourceMetrics) DataPointCount() (int, error)
 func (r ResourceMetrics) Resource() ([]byte, error)
 func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error)
 
-// Same pattern for ResourceLogs and ResourceSpans
+type ResourceLogs []byte
+func (r ResourceLogs) LogRecordCount() (int, error)
+func (r ResourceLogs) Resource() ([]byte, error)
+func (r ResourceLogs) WriteTo(w io.Writer) (int64, error)
+
+type ResourceSpans []byte
+func (r ResourceSpans) SpanCount() (int, error)
+func (r ResourceSpans) Resource() ([]byte, error)
+func (r ResourceSpans) WriteTo(w io.Writer) (int64, error)
 ```
 
 ## Design Philosophy
-
-**"Provide raw bytes and tools. Users decide what to do with them."**
 
 This library provides:
 - Raw bytes at different granularity levels
@@ -160,21 +163,17 @@ Benchmarks on Apple M4 (5 resources, 100 signals per resource):
 
 **Note:** The 2 allocations (24 bytes) in iteration are from the iterator error handling pattern (closure capture mechanism).
 
-For detailed benchmarks and methodology, see [BENCHMARKS.md](BENCHMARKS.md).
+For detailed benchmarks and methodology, see [BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Documentation
 
-- **[DESIGN.md](DESIGN.md)** - Architecture, design decisions, and implementation details
-- **[BENCHMARKS.md](BENCHMARKS.md)** - Performance comparison and methodology
-- **[example_test.go](example_test.go)** - Complete working examples (rate limiting, sharding, filtering)
+- **[DESIGN.md](docs/DESIGN.md)** - Architecture, design decisions, and implementation details
+- **[BENCHMARKS.md](docs/BENCHMARKS.md)** - Performance comparison and methodology
+- **[example_test.go](example_test.go)** - Complete working examples (observability metrics, sharding, sampling)
 
 ## Requirements
 
 - Go 1.23+ (for `iter.Seq` iterator support)
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 

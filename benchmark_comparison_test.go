@@ -42,30 +42,7 @@ func BenchmarkMetrics_Count_Unmarshal(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		// Count data points by iterating through structure
-		count := 0
-		for ri := 0; ri < metrics.ResourceMetrics().Len(); ri++ {
-			rm := metrics.ResourceMetrics().At(ri)
-			for si := 0; si < rm.ScopeMetrics().Len(); si++ {
-				sm := rm.ScopeMetrics().At(si)
-				for mi := 0; mi < sm.Metrics().Len(); mi++ {
-					m := sm.Metrics().At(mi)
-					switch m.Type() {
-					case pmetric.MetricTypeGauge:
-						count += m.Gauge().DataPoints().Len()
-					case pmetric.MetricTypeSum:
-						count += m.Sum().DataPoints().Len()
-					case pmetric.MetricTypeHistogram:
-						count += m.Histogram().DataPoints().Len()
-					case pmetric.MetricTypeExponentialHistogram:
-						count += m.ExponentialHistogram().DataPoints().Len()
-					case pmetric.MetricTypeSummary:
-						count += m.Summary().DataPoints().Len()
-					}
-				}
-			}
-		}
-		_ = count
+		_ = metrics.DataPointCount()
 	}
 }
 
@@ -154,16 +131,7 @@ func BenchmarkTraces_Count_Unmarshal(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		// Count spans by iterating through structure
-		count := 0
-		for ri := 0; ri < traces.ResourceSpans().Len(); ri++ {
-			rs := traces.ResourceSpans().At(ri)
-			for si := 0; si < rs.ScopeSpans().Len(); si++ {
-				ss := rs.ScopeSpans().At(si)
-				count += ss.Spans().Len()
-			}
-		}
-		_ = count
+		_ = traces.SpanCount()
 	}
 }
 
@@ -252,16 +220,7 @@ func BenchmarkLogs_Count_Unmarshal(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		// Count log records by iterating through structure
-		count := 0
-		for ri := 0; ri < logs.ResourceLogs().Len(); ri++ {
-			rl := logs.ResourceLogs().At(ri)
-			for si := 0; si < rl.ScopeLogs().Len(); si++ {
-				sl := rl.ScopeLogs().At(si)
-				count += sl.LogRecords().Len()
-			}
-		}
-		_ = count
+		_ = logs.LogRecordCount()
 	}
 }
 

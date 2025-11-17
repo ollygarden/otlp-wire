@@ -54,6 +54,11 @@ func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics
 	return seq, errFunc
 }
 
+// DataPointCount returns the number of metric data points in this resource.
+func (r ResourceMetrics) DataPointCount() (int, error) {
+	return countInResourceMetrics([]byte(r))
+}
+
 // Resource returns the raw Resource message bytes.
 func (r ResourceMetrics) Resource() ([]byte, error) {
 	return extractResourceMessage([]byte(r))
@@ -92,6 +97,11 @@ func (l ExportLogsServiceRequest) ResourceLogs() (iter.Seq[ResourceLogs], func()
 	return seq, errFunc
 }
 
+// LogRecordCount returns the number of log records in this resource.
+func (r ResourceLogs) LogRecordCount() (int, error) {
+	return countInResourceLogs([]byte(r))
+}
+
 // Resource returns the raw Resource message bytes.
 func (r ResourceLogs) Resource() ([]byte, error) {
 	return extractResourceMessage([]byte(r))
@@ -128,6 +138,11 @@ func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], fu
 	}
 
 	return seq, errFunc
+}
+
+// SpanCount returns the number of spans in this resource.
+func (r ResourceSpans) SpanCount() (int, error) {
+	return countInResourceSpans([]byte(r))
 }
 
 // Resource returns the raw Resource message bytes.

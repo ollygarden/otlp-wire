@@ -9,25 +9,21 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 )
 
-// Example_globalRateLimiting demonstrates using Count() for rate limiting.
-func Example_globalRateLimiting() {
+// Example_observabilityStats demonstrates using Count() for observability metrics.
+func Example_observabilityStats() {
 	// Simulate receiving OTLP metrics data
 	metrics := createSampleMetrics(100)
 	marshaler := &pmetric.ProtoMarshaler{}
 	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
 
-	// Count signals for rate limiting
+	// Count signals for observability
 	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 	count, _ := data.DataPointCount()
 
-	globalLimit := 50
-	if count > globalLimit {
-		fmt.Println("Rate limit exceeded")
-	} else {
-		fmt.Printf("Accepted %d data points\n", count)
-	}
+	// Emit metrics about incoming data (cardinality monitoring, billing, etc.)
+	fmt.Printf("Received %d data points for processing\n", count)
 
-	// Output: Rate limit exceeded
+	// Output: Received 100 data points for processing
 }
 
 // Example_shardingByService demonstrates splitting batches for distributed processing.
@@ -66,128 +62,24 @@ func Example_shardingByService() {
 	// Resource 2 → Worker 2 (10 data points)
 }
 
-// Example_perServiceRateLimiting demonstrates per-service rate limiting.
-func Example_perServiceRateLimiting() {
-	metrics := createMultiServiceMetrics()
-	marshaler := &pmetric.ProtoMarshaler{}
-	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
-
-	serviceLimit := 15
-	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-
-	resources, getErr := data.ResourceMetrics()
-	for resource := range resources {
-		// Count signals in this resource
-		var buf bytes.Buffer
-		resource.WriteTo(&buf)
-		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
-
-		if count > serviceLimit {
-			fmt.Printf("Resource rejected: %d data points (limit: %d)\n", count, serviceLimit)
-		} else {
-			fmt.Printf("Resource accepted: %d data points\n", count)
-		}
-	}
-	if err := getErr(); err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
-
-	// Output:
-	// Resource accepted: 10 data points
-	// Resource accepted: 10 data points
-	// Resource accepted: 10 data points
-}
-
-// Example_iteratorSharding demonstrates zero-allocation sharding using iterators.
-func Example_iteratorSharding() {
-	metrics := createMultiServiceMetrics()
-	marshaler := &pmetric.ProtoMarshaler{}
-	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
-
-	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-	numWorkers := 3
-
-	// Iterator approach - no slice allocation
-	resources, getErr := data.ResourceMetrics()
-	for resource := range resources {
-		// Hash resource for consistent routing
-		resourceBytes, _ := resource.Resource()
-		hash := hashBytes(resourceBytes)
-		workerID := hash % uint64(numWorkers)
-
-		var buf bytes.Buffer
-		resource.WriteTo(&buf)
-		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
-
-		fmt.Printf("Worker %d: %d data points\n", workerID, count)
-	}
-	if err := getErr(); err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
-
-	// Output:
-	// Worker 0: 10 data points
-	// Worker 1: 10 data points
-	// Worker 2: 10 data points
-}
-
-// Example_iteratorEarlyExit demonstrates stopping iteration early.
-func Example_iteratorEarlyExit() {
-	metrics := createMultiServiceMetrics()
-	marshaler := &pmetric.ProtoMarshaler{}
-	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
-
-	data := otlpwire.ExportMetricsServiceRequest(otlpBytes)
-	limit := 15
-
-	// Process resources until limit is exceeded
-	totalProcessed := 0
-	resources, getErr := data.ResourceMetrics()
-	for resource := range resources {
-		var buf bytes.Buffer
-		resource.WriteTo(&buf)
-		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
-
-		if totalProcessed+count > limit {
-			fmt.Printf("Rate limit reached, skipping remaining resources\n")
-			break // Early exit - remaining resources not parsed
-		}
-
-		totalProcessed += count
-		fmt.Printf("Processed: %d data points (total: %d)\n", count, totalProcessed)
-	}
-	if err := getErr(); err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
-
-	// Output:
-	// Processed: 10 data points (total: 10)
-	// Rate limit reached, skipping remaining resources
-}
-
 // Example_typeComposition demonstrates how types compose naturally.
 func Example_typeComposition() {
 	metrics := createSampleMetrics(25)
 	marshaler := &pmetric.ProtoMarshaler{}
 	otlpBytes, _ := marshaler.MarshalMetrics(metrics)
 
-	// MetricsData wraps complete OTLP message
+	// Count at batch level
 	batch := otlpwire.ExportMetricsServiceRequest(otlpBytes)
 	count, _ := batch.DataPointCount()
 	fmt.Printf("Total data points: %d\n", count)
 
-	// Iterate over resources
+	// Iterate and count at resource level (zero allocation)
 	resourceCount := 0
 	resources, getErr := batch.ResourceMetrics()
 	for resource := range resources {
 		if resourceCount == 0 {
-			// WriteTo writes valid OTLP message
-			var buf bytes.Buffer
-			resource.WriteTo(&buf)
-
-			// Cast back to MetricsData to count this resource only
-			singleResourceBatch := otlpwire.ExportMetricsServiceRequest(buf.Bytes())
-			dpCount, _ := singleResourceBatch.DataPointCount()
+			// Count signals in this resource (zero allocation)
+			dpCount, _ := resource.DataPointCount()
 			fmt.Printf("Resource 0 data points: %d\n", dpCount)
 		}
 
