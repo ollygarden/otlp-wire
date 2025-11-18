@@ -816,7 +816,7 @@ func BenchmarkResourceMetrics_WriteTo_Discard(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resource.WriteTo(discard{})
+		_, _ = resource.WriteTo(discard{})
 	}
 }
 
@@ -826,7 +826,7 @@ func BenchmarkResourceMetrics_WriteTo_Buffer(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var buf bytes.Buffer
-		resource.WriteTo(&buf)
+		_, _ = resource.WriteTo(&buf)
 	}
 }
 

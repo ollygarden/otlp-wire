@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"hash/fnv"
 
-	"go.olly.garden/otlp-wire"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+
+	"go.olly.garden/otlp-wire"
 )
 
 // Example_observabilityStats demonstrates using Count() for observability metrics.
@@ -43,10 +44,10 @@ func Example_shardingByService() {
 		// Hash resource for consistent routing
 		resourceBytes, _ := resource.Resource()
 		hash := hashBytes(resourceBytes)
-		workerID := hash % uint64(numWorkers)
+		workerID := int(hash % uint64(numWorkers))
 
 		var buf bytes.Buffer
-		resource.WriteTo(&buf)
+		_, _ = resource.WriteTo(&buf)
 		count, _ := otlpwire.ExportMetricsServiceRequest(buf.Bytes()).DataPointCount()
 
 		fmt.Printf("Resource %d → Worker %d (%d data points)\n", i, workerID, count)
@@ -141,6 +142,6 @@ func createMultiServiceMetrics() pmetric.Metrics {
 
 func hashBytes(data []byte) uint64 {
 	h := fnv.New64a()
-	h.Write(data)
+	_, _ = h.Write(data)
 	return h.Sum64()
 }

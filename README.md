@@ -2,6 +2,7 @@
 
 OTLP wire format utilities for Go. Count, shard, and route telemetry data without unmarshaling.
 
+[![CI](https://github.com/ollygarden/otlp-wire/workflows/CI/badge.svg)](https://github.com/ollygarden/otlp-wire/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/go.olly.garden/otlp-wire.svg)](https://pkg.go.dev/go.olly.garden/otlp-wire)
 [![Go Report Card](https://goreportcard.com/badge/go.olly.garden/otlp-wire)](https://goreportcard.com/report/go.olly.garden/otlp-wire)
 
