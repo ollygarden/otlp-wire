@@ -391,7 +391,10 @@ func countRepeatedField(data []byte, fieldNum protowire.Number, countFunc func([
 		}
 		pos += tagLen
 
-		if num == fieldNum && wireType == protowire.BytesType {
+		if num == fieldNum {
+			if wireType != protowire.BytesType {
+				return 0, errors.New("wrong wire type for field")
+			}
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
 				return 0, errors.New("invalid bytes in repeated field")
@@ -427,7 +430,10 @@ func countOccurrences(data []byte, fieldNum protowire.Number) (int, error) {
 		}
 		pos += tagLen
 
-		if num == fieldNum && wireType == protowire.BytesType {
+		if num == fieldNum {
+			if wireType != protowire.BytesType {
+				return 0, errors.New("wrong wire type for field")
+			}
 			_, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
 				return 0, errors.New("invalid bytes in field")
@@ -459,7 +465,11 @@ func forEachRepeatedField(data []byte, fieldNum protowire.Number, fn func([]byte
 		}
 		pos += tagLen
 
-		if num == fieldNum && wireType == protowire.BytesType {
+		if num == fieldNum {
+			if wireType != protowire.BytesType {
+				fn(nil, errors.New("wrong wire type for field"))
+				return
+			}
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
 				fn(nil, errors.New("invalid bytes in repeated field"))
