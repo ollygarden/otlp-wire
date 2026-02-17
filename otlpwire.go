@@ -562,7 +562,10 @@ func extractFixedBytesField(data []byte, fieldNum protowire.Number, size int) ([
 		}
 		pos += tagLen
 
-		if num == fieldNum && wireType == protowire.BytesType {
+		if num == fieldNum {
+			if wireType != protowire.BytesType {
+				return nil, errors.New("wrong wire type for field")
+			}
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
 				return nil, errors.New("invalid bytes in field")

@@ -1030,6 +1030,18 @@ func BenchmarkSpanIteration_PdataUnmarshal(b *testing.B) {
 	}
 }
 
+func TestSpan_WrongWireType(t *testing.T) {
+	// Craft a span with trace_id (field 1) encoded as varint instead of bytes
+	buf := []byte{}
+	buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+	buf = protowire.AppendVarint(buf, 12345)
+
+	s := Span(buf)
+	_, err := s.TraceID()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrong wire type")
+}
+
 // ========== Resource Tests ==========
 
 func TestResourceMetrics_Resource(t *testing.T) {
