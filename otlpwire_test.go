@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -578,6 +579,467 @@ func TestExportTracesServiceRequest_SplitByResource(t *testing.T) {
 			assert.Equal(t, originalCount, totalFromSplits)
 		})
 	}
+}
+
+// ========== ScopeSpans and Span Tests ==========
+
+func TestResourceSpans_ScopeSpans(t *testing.T) {
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+
+	// Add 3 ScopeSpans with different span counts
+	ss1 := rs.ScopeSpans().AppendEmpty()
+	ss1.Spans().AppendEmpty().SetName("span-1a")
+	ss1.Spans().AppendEmpty().SetName("span-1b")
+
+	ss2 := rs.ScopeSpans().AppendEmpty()
+	ss2.Spans().AppendEmpty().SetName("span-2a")
+
+	ss3 := rs.ScopeSpans().AppendEmpty()
+	ss3.Spans().AppendEmpty().SetName("span-3a")
+	ss3.Spans().AppendEmpty().SetName("span-3b")
+	ss3.Spans().AppendEmpty().SetName("span-3c")
+
+	marshaler := &ptrace.ProtoMarshaler{}
+	data, err := marshaler.MarshalTraces(traces)
+	require.NoError(t, err)
+
+	wire := ExportTracesServiceRequest(data)
+	rsIter, rsErr := wire.ResourceSpans()
+	for rs := range rsIter {
+		scopeCount := 0
+		spanCounts := []int{}
+		ssIter, ssErr := rs.ScopeSpans()
+		for ss := range ssIter {
+			scopeCount++
+			count, err := ss.SpanCount()
+			require.NoError(t, err)
+			spanCounts = append(spanCounts, count)
+		}
+		require.NoError(t, ssErr())
+		assert.Equal(t, 3, scopeCount)
+		assert.Equal(t, []int{2, 1, 3}, spanCounts)
+	}
+	require.NoError(t, rsErr())
+}
+
+func TestScopeSpans_Spans(t *testing.T) {
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	ss := rs.ScopeSpans().AppendEmpty()
+
+	expectedTraceID := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	expectedSpanIDs := [][8]byte{
+		{1, 0, 0, 0, 0, 0, 0, 0},
+		{2, 0, 0, 0, 0, 0, 0, 0},
+		{3, 0, 0, 0, 0, 0, 0, 0},
+	}
+
+	for _, id := range expectedSpanIDs {
+		span := ss.Spans().AppendEmpty()
+		span.SetTraceID(pcommon.TraceID(expectedTraceID))
+		span.SetSpanID(pcommon.SpanID(id))
+	}
+
+	marshaler := &ptrace.ProtoMarshaler{}
+	data, err := marshaler.MarshalTraces(traces)
+	require.NoError(t, err)
+
+	wire := ExportTracesServiceRequest(data)
+	rsIter, rsErr := wire.ResourceSpans()
+	for rs := range rsIter {
+		ssIter, ssErr := rs.ScopeSpans()
+		for ss := range ssIter {
+			i := 0
+			spanIter, spanErr := ss.Spans()
+			for s := range spanIter {
+				traceID, err := s.TraceID()
+				require.NoError(t, err)
+				assert.Equal(t, expectedTraceID, traceID)
+
+				spanID, err := s.SpanID()
+				require.NoError(t, err)
+				assert.Equal(t, expectedSpanIDs[i], spanID)
+
+				i++
+			}
+			require.NoError(t, spanErr())
+			assert.Equal(t, 3, i)
+		}
+		require.NoError(t, ssErr())
+	}
+	require.NoError(t, rsErr())
+}
+
+func TestSpanFieldAccessors(t *testing.T) {
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	ss := rs.ScopeSpans().AppendEmpty()
+	span := ss.Spans().AppendEmpty()
+
+	expectedTraceID := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	expectedSpanID := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	expectedParentID := [8]byte{8, 7, 6, 5, 4, 3, 2, 1}
+
+	span.SetTraceID(pcommon.TraceID(expectedTraceID))
+	span.SetSpanID(pcommon.SpanID(expectedSpanID))
+	span.SetParentSpanID(pcommon.SpanID(expectedParentID))
+	span.SetName("test-span")
+
+	marshaler := &ptrace.ProtoMarshaler{}
+	data, err := marshaler.MarshalTraces(traces)
+	require.NoError(t, err)
+
+	wire := ExportTracesServiceRequest(data)
+	rsIter, rsErr := wire.ResourceSpans()
+	for rs := range rsIter {
+		ssIter, ssErr := rs.ScopeSpans()
+		for ss := range ssIter {
+			spanIter, spanErr := ss.Spans()
+			for s := range spanIter {
+				traceID, err := s.TraceID()
+				require.NoError(t, err)
+				assert.Equal(t, expectedTraceID, traceID)
+
+				spanID, err := s.SpanID()
+				require.NoError(t, err)
+				assert.Equal(t, expectedSpanID, spanID)
+
+				parentID, err := s.ParentSpanID()
+				require.NoError(t, err)
+				assert.Equal(t, expectedParentID, parentID)
+			}
+			require.NoError(t, spanErr())
+		}
+		require.NoError(t, ssErr())
+	}
+	require.NoError(t, rsErr())
+}
+
+func TestSpanFieldAccessors_RootSpan(t *testing.T) {
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	ss := rs.ScopeSpans().AppendEmpty()
+	span := ss.Spans().AppendEmpty()
+
+	expectedTraceID := [16]byte{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160}
+	expectedSpanID := [8]byte{10, 20, 30, 40, 50, 60, 70, 80}
+
+	span.SetTraceID(pcommon.TraceID(expectedTraceID))
+	span.SetSpanID(pcommon.SpanID(expectedSpanID))
+	// No parent set — root span
+
+	marshaler := &ptrace.ProtoMarshaler{}
+	data, err := marshaler.MarshalTraces(traces)
+	require.NoError(t, err)
+
+	wire := ExportTracesServiceRequest(data)
+	rsIter, rsErr := wire.ResourceSpans()
+	for rs := range rsIter {
+		ssIter, ssErr := rs.ScopeSpans()
+		for ss := range ssIter {
+			spanIter, spanErr := ss.Spans()
+			for s := range spanIter {
+				traceID, err := s.TraceID()
+				require.NoError(t, err)
+				assert.Equal(t, expectedTraceID, traceID)
+
+				spanID, err := s.SpanID()
+				require.NoError(t, err)
+				assert.Equal(t, expectedSpanID, spanID)
+
+				parentID, err := s.ParentSpanID()
+				require.NoError(t, err)
+				assert.Equal(t, [8]byte{}, parentID, "root span should have zero parent ID")
+			}
+			require.NoError(t, spanErr())
+		}
+		require.NoError(t, ssErr())
+	}
+	require.NoError(t, rsErr())
+}
+
+func TestSpanFieldAccessors_MultipleResourcesAndScopes(t *testing.T) {
+	traces := ptrace.NewTraces()
+
+	// Resource 1 with 2 ScopeSpans
+	rs1 := traces.ResourceSpans().AppendEmpty()
+	rs1.Resource().Attributes().PutStr("service.name", "svc-A")
+
+	ss1a := rs1.ScopeSpans().AppendEmpty()
+	s1 := ss1a.Spans().AppendEmpty()
+	s1.SetTraceID(pcommon.TraceID([16]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}))
+	s1.SetSpanID(pcommon.SpanID([8]byte{1, 1, 1, 1, 1, 1, 1, 1}))
+
+	ss1b := rs1.ScopeSpans().AppendEmpty()
+	s2 := ss1b.Spans().AppendEmpty()
+	s2.SetTraceID(pcommon.TraceID([16]byte{2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}))
+	s2.SetSpanID(pcommon.SpanID([8]byte{2, 2, 2, 2, 2, 2, 2, 2}))
+	s2.SetParentSpanID(pcommon.SpanID([8]byte{1, 1, 1, 1, 1, 1, 1, 1}))
+
+	// Resource 2 with 1 ScopeSpans
+	rs2 := traces.ResourceSpans().AppendEmpty()
+	rs2.Resource().Attributes().PutStr("service.name", "svc-B")
+
+	ss2 := rs2.ScopeSpans().AppendEmpty()
+	s3 := ss2.Spans().AppendEmpty()
+	s3.SetTraceID(pcommon.TraceID([16]byte{3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3}))
+	s3.SetSpanID(pcommon.SpanID([8]byte{3, 3, 3, 3, 3, 3, 3, 3}))
+
+	marshaler := &ptrace.ProtoMarshaler{}
+	data, err := marshaler.MarshalTraces(traces)
+	require.NoError(t, err)
+
+	wire := ExportTracesServiceRequest(data)
+
+	type spanInfo struct {
+		traceID  [16]byte
+		spanID   [8]byte
+		parentID [8]byte
+	}
+	var spans []spanInfo
+
+	rsIter, rsErr := wire.ResourceSpans()
+	for rs := range rsIter {
+		ssIter, ssErr := rs.ScopeSpans()
+		for ss := range ssIter {
+			spanIter, spanErr := ss.Spans()
+			for s := range spanIter {
+				traceID, err := s.TraceID()
+				require.NoError(t, err)
+				spanID, err := s.SpanID()
+				require.NoError(t, err)
+				parentID, err := s.ParentSpanID()
+				require.NoError(t, err)
+				spans = append(spans, spanInfo{traceID, spanID, parentID})
+			}
+			require.NoError(t, spanErr())
+		}
+		require.NoError(t, ssErr())
+	}
+	require.NoError(t, rsErr())
+
+	require.Len(t, spans, 3)
+
+	assert.Equal(t, [16]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, spans[0].traceID)
+	assert.Equal(t, [8]byte{1, 1, 1, 1, 1, 1, 1, 1}, spans[0].spanID)
+	assert.Equal(t, [8]byte{}, spans[0].parentID)
+
+	assert.Equal(t, [16]byte{2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}, spans[1].traceID)
+	assert.Equal(t, [8]byte{2, 2, 2, 2, 2, 2, 2, 2}, spans[1].spanID)
+	assert.Equal(t, [8]byte{1, 1, 1, 1, 1, 1, 1, 1}, spans[1].parentID)
+
+	assert.Equal(t, [16]byte{3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3}, spans[2].traceID)
+	assert.Equal(t, [8]byte{3, 3, 3, 3, 3, 3, 3, 3}, spans[2].spanID)
+	assert.Equal(t, [8]byte{}, spans[2].parentID)
+}
+
+func TestSpanFieldAccessors_RoundTrip(t *testing.T) {
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	ss := rs.ScopeSpans().AppendEmpty()
+
+	expectedTraceID := pcommon.TraceID([16]byte{0xde, 0xad, 0xbe, 0xef, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
+	expectedSpanID := pcommon.SpanID([8]byte{0xca, 0xfe, 0xba, 0xbe, 1, 2, 3, 4})
+	expectedParentID := pcommon.SpanID([8]byte{0xfe, 0xed, 0xfa, 0xce, 5, 6, 7, 8})
+
+	span := ss.Spans().AppendEmpty()
+	span.SetTraceID(expectedTraceID)
+	span.SetSpanID(expectedSpanID)
+	span.SetParentSpanID(expectedParentID)
+	span.SetName("round-trip-span")
+
+	marshaler := &ptrace.ProtoMarshaler{}
+	data, err := marshaler.MarshalTraces(traces)
+	require.NoError(t, err)
+
+	// Extract via otlp-wire
+	wire := ExportTracesServiceRequest(data)
+	rsIter, rsErr := wire.ResourceSpans()
+	for rs := range rsIter {
+		ssIter, ssErr := rs.ScopeSpans()
+		for ss := range ssIter {
+			spanIter, spanErr := ss.Spans()
+			for s := range spanIter {
+				gotTraceID, err := s.TraceID()
+				require.NoError(t, err)
+				gotSpanID, err := s.SpanID()
+				require.NoError(t, err)
+				gotParentID, err := s.ParentSpanID()
+				require.NoError(t, err)
+
+				assert.Equal(t, [16]byte(expectedTraceID), gotTraceID)
+				assert.Equal(t, [8]byte(expectedSpanID), gotSpanID)
+				assert.Equal(t, [8]byte(expectedParentID), gotParentID)
+			}
+			require.NoError(t, spanErr())
+		}
+		require.NoError(t, ssErr())
+	}
+	require.NoError(t, rsErr())
+
+	// Also unmarshal via pdata and confirm values match
+	unmarshaler := &ptrace.ProtoUnmarshaler{}
+	pdataTraces, err := unmarshaler.UnmarshalTraces(data)
+	require.NoError(t, err)
+	pdataSpan := pdataTraces.ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0)
+	assert.Equal(t, expectedTraceID, pdataSpan.TraceID())
+	assert.Equal(t, expectedSpanID, pdataSpan.SpanID())
+	assert.Equal(t, expectedParentID, pdataSpan.ParentSpanID())
+}
+
+func TestScopeSpans_SpanCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		spanCount int
+	}{
+		{"zero spans", 0},
+		{"one span", 1},
+		{"many spans", 50},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			traces := ptrace.NewTraces()
+			rs := traces.ResourceSpans().AppendEmpty()
+			ss := rs.ScopeSpans().AppendEmpty()
+
+			for i := 0; i < tt.spanCount; i++ {
+				ss.Spans().AppendEmpty().SetName("span")
+			}
+
+			marshaler := &ptrace.ProtoMarshaler{}
+			data, err := marshaler.MarshalTraces(traces)
+			require.NoError(t, err)
+
+			wire := ExportTracesServiceRequest(data)
+			rsIter, rsErr := wire.ResourceSpans()
+			for rs := range rsIter {
+				ssIter, ssErr := rs.ScopeSpans()
+				for ss := range ssIter {
+					count, err := ss.SpanCount()
+					require.NoError(t, err)
+					assert.Equal(t, tt.spanCount, count)
+				}
+				require.NoError(t, ssErr())
+			}
+			require.NoError(t, rsErr())
+		})
+	}
+}
+
+func TestSpan_MalformedData(t *testing.T) {
+	// Truncated protobuf
+	s := Span([]byte{0x0a, 0x10, 0x01, 0x02}) // field 1, bytes, length 16, but only 2 bytes
+	_, err := s.TraceID()
+	require.Error(t, err)
+}
+
+func TestSpan_WrongFieldSize(t *testing.T) {
+	// Craft a span with trace_id field having wrong size (8 instead of 16)
+	buf := []byte{}
+	buf = protowire.AppendTag(buf, 1, protowire.BytesType)
+	buf = protowire.AppendBytes(buf, []byte{1, 2, 3, 4, 5, 6, 7, 8}) // 8 bytes instead of 16
+
+	s := Span(buf)
+	_, err := s.TraceID()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected size")
+}
+
+// ========== Span Benchmarks ==========
+
+func BenchmarkSpanFieldAccessors(b *testing.B) {
+	traces := ptrace.NewTraces()
+	rs := traces.ResourceSpans().AppendEmpty()
+	ss := rs.ScopeSpans().AppendEmpty()
+	span := ss.Spans().AppendEmpty()
+	span.SetTraceID(pcommon.TraceID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}))
+	span.SetSpanID(pcommon.SpanID([8]byte{1, 2, 3, 4, 5, 6, 7, 8}))
+	span.SetParentSpanID(pcommon.SpanID([8]byte{8, 7, 6, 5, 4, 3, 2, 1}))
+	span.SetName("bench-span")
+
+	marshaler := &ptrace.ProtoMarshaler{}
+	data, err := marshaler.MarshalTraces(traces)
+	require.NoError(b, err)
+
+	// Extract a single Span from the wire data
+	wire := ExportTracesServiceRequest(data)
+	var wireSpan Span
+	rsIter, _ := wire.ResourceSpans()
+	for rs := range rsIter {
+		ssIter, _ := rs.ScopeSpans()
+		for ss := range ssIter {
+			spanIter, _ := ss.Spans()
+			for s := range spanIter {
+				wireSpan = s
+			}
+		}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = wireSpan.TraceID()
+		_, _ = wireSpan.SpanID()
+		_, _ = wireSpan.ParentSpanID()
+	}
+}
+
+func BenchmarkSpanIteration(b *testing.B) {
+	tracesData := createBenchTracesData(b, true)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		rsIter, _ := tracesData.ResourceSpans()
+		for rs := range rsIter {
+			ssIter, _ := rs.ScopeSpans()
+			for ss := range ssIter {
+				spanIter, _ := ss.Spans()
+				for s := range spanIter {
+					_, _ = s.TraceID()
+					_, _ = s.SpanID()
+					_, _ = s.ParentSpanID()
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkSpanIteration_PdataUnmarshal(b *testing.B) {
+	tracesData := createBenchTracesData(b, true)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		unmarshaler := &ptrace.ProtoUnmarshaler{}
+		traces, _ := unmarshaler.UnmarshalTraces([]byte(tracesData))
+		for j := 0; j < traces.ResourceSpans().Len(); j++ {
+			rs := traces.ResourceSpans().At(j)
+			for k := 0; k < rs.ScopeSpans().Len(); k++ {
+				ss := rs.ScopeSpans().At(k)
+				for l := 0; l < ss.Spans().Len(); l++ {
+					s := ss.Spans().At(l)
+					_ = s.TraceID()
+					_ = s.SpanID()
+					_ = s.ParentSpanID()
+				}
+			}
+		}
+	}
+}
+
+func TestSpan_WrongWireType(t *testing.T) {
+	// Craft a span with trace_id (field 1) encoded as varint instead of bytes
+	buf := []byte{}
+	buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+	buf = protowire.AppendVarint(buf, 12345)
+
+	s := Span(buf)
+	_, err := s.TraceID()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrong wire type")
 }
 
 // ========== Resource Tests ==========

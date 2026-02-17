@@ -11,6 +11,7 @@ OTLP wire format utilities for Go. Count, shard, and route telemetry data withou
 - Count signals (metrics/logs/traces) without unmarshaling
 - Iterate over resources with minimal allocations for parallel processing
 - Extract resource metadata for routing decisions
+- Access individual span fields (TraceID, SpanID, ParentSpanID) with zero allocations
 
 ## Performance Characteristics
 
@@ -34,6 +35,7 @@ See [BENCHMARKS.md](docs/BENCHMARKS.md) for detailed comparison.
 - **Observability**: Count signals for monitoring ingestion volume
 - **Sharding**: Split batches by resource for parallel processing
 - **Routing**: Extract resource attributes for routing decisions
+- **Span Processing**: Extract trace/span IDs without full unmarshal
 
 ## Installation
 
@@ -70,6 +72,27 @@ if err := getErr(); err != nil {
 }
 ```
 
+```go
+// Access individual span fields without full unmarshal
+wire := otlpwire.ExportTracesServiceRequest(otlpBytes)
+rsIter, rsErr := wire.ResourceSpans()
+for rs := range rsIter {
+    ssIter, ssErr := rs.ScopeSpans()
+    for ss := range ssIter {
+        spanIter, spanErr := ss.Spans()
+        for s := range spanIter {
+            traceID, _ := s.TraceID()       // [16]byte, zero allocs
+            spanID, _ := s.SpanID()          // [8]byte, zero allocs
+            parentID, _ := s.ParentSpanID()  // [8]byte, zero allocs
+            // ... use IDs for bloom filters, trace assembly, etc.
+        }
+        if err := spanErr(); err != nil { return err }
+    }
+    if err := ssErr(); err != nil { return err }
+}
+if err := rsErr(); err != nil { return err }
+```
+
 See [example_test.go](example_test.go) for complete working examples.
 
 ## API Overview
@@ -85,6 +108,11 @@ ExportLogsServiceRequest (OTLP message bytes)
 
 ExportTracesServiceRequest (OTLP message bytes)
   └─ ResourceSpans[] (one per resource)
+       └─ ScopeSpans[] (one per instrumentation scope)
+            └─ Span[] (individual spans)
+                 ├─ TraceID()
+                 ├─ SpanID()
+                 └─ ParentSpanID()
 ```
 
 ### Methods
@@ -120,6 +148,22 @@ type ResourceSpans []byte
 func (r ResourceSpans) SpanCount() (int, error)
 func (r ResourceSpans) Resource() ([]byte, error)
 func (r ResourceSpans) WriteTo(w io.Writer) (int64, error)
+func (r ResourceSpans) ScopeSpans() (iter.Seq[ScopeSpans], func() error)
+```
+
+**Scope-level operations (traces):**
+```go
+type ScopeSpans []byte
+func (s ScopeSpans) SpanCount() (int, error)
+func (s ScopeSpans) Spans() (iter.Seq[Span], func() error)
+```
+
+**Span-level field accessors:**
+```go
+type Span []byte
+func (s Span) TraceID() ([16]byte, error)
+func (s Span) SpanID() ([8]byte, error)
+func (s Span) ParentSpanID() ([8]byte, error)
 ```
 
 ## Design Philosophy
