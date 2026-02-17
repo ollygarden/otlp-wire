@@ -27,6 +27,12 @@ type ResourceLogs []byte
 // ResourceSpans represents a single ResourceSpans message.
 type ResourceSpans []byte
 
+// ScopeSpans represents a single ScopeSpans message (raw wire bytes).
+type ScopeSpans []byte
+
+// Span represents a single Span message (raw wire bytes).
+type Span []byte
+
 // DataPointCount returns the total number of metric data points in the batch.
 func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
 	return countMetricDataPoints([]byte(m))
@@ -154,6 +160,96 @@ func (r ResourceSpans) Resource() ([]byte, error) {
 // Implements io.WriterTo interface.
 func (r ResourceSpans) WriteTo(w io.Writer) (int64, error) {
 	return writeResourceMessage(w, []byte(r))
+}
+
+// ScopeSpans returns an iterator over ScopeSpans in this ResourceSpans.
+// Field 2 in the ResourceSpans protobuf message.
+// The returned function should be called after iteration to check for errors.
+func (r ResourceSpans) ScopeSpans() (iter.Seq[ScopeSpans], func() error) {
+	var iterErr error
+
+	seq := func(yield func(ScopeSpans) bool) {
+		forEachRepeatedField([]byte(r), 2, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(ScopeSpans(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
+// SpanCount returns the number of spans in this ScopeSpans.
+func (s ScopeSpans) SpanCount() (int, error) {
+	return countOccurrences([]byte(s), 2)
+}
+
+// Spans returns an iterator over Spans in this ScopeSpans.
+// Field 2 in the ScopeSpans protobuf message.
+// The returned function should be called after iteration to check for errors.
+func (s ScopeSpans) Spans() (iter.Seq[Span], func() error) {
+	var iterErr error
+
+	seq := func(yield func(Span) bool) {
+		forEachRepeatedField([]byte(s), 2, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(Span(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
+// TraceID extracts the trace ID from the Span.
+// Returns the raw 16 bytes from field 1.
+// Returns zero value if the field is not present.
+func (s Span) TraceID() ([16]byte, error) {
+	raw, err := extractFixedBytesField([]byte(s), 1, 16)
+	if err != nil {
+		return [16]byte{}, err
+	}
+	var id [16]byte
+	copy(id[:], raw)
+	return id, nil
+}
+
+// SpanID extracts the span ID from the Span.
+// Returns the raw 8 bytes from field 2.
+// Returns zero value if the field is not present.
+func (s Span) SpanID() ([8]byte, error) {
+	raw, err := extractFixedBytesField([]byte(s), 2, 8)
+	if err != nil {
+		return [8]byte{}, err
+	}
+	var id [8]byte
+	copy(id[:], raw)
+	return id, nil
+}
+
+// ParentSpanID extracts the parent span ID from the Span.
+// Returns the raw 8 bytes from field 4.
+// Returns zero value if the field is not present (root span).
+func (s Span) ParentSpanID() ([8]byte, error) {
+	raw, err := extractFixedBytesField([]byte(s), 4, 8)
+	if err != nil {
+		return [8]byte{}, err
+	}
+	var id [8]byte
+	copy(id[:], raw)
+	return id, nil
 }
 
 // countMetricDataPoints counts the number of metric data points in an OTLP
@@ -452,4 +548,40 @@ func writeResourceMessage(w io.Writer, data []byte) (int64, error) {
 
 	n2, err := w.Write(data)
 	return int64(n1 + n2), err
+}
+
+// extractFixedBytesField extracts a bytes field of known size from protobuf data.
+// Returns nil (not an error) if the field is not present.
+func extractFixedBytesField(data []byte, fieldNum protowire.Number, size int) ([]byte, error) {
+	pos := 0
+
+	for pos < len(data) {
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			return nil, errors.New("malformed protobuf tag")
+		}
+		pos += tagLen
+
+		if num == fieldNum && wireType == protowire.BytesType {
+			msgBytes, n := protowire.ConsumeBytes(data[pos:])
+			if n < 0 {
+				return nil, errors.New("invalid bytes in field")
+			}
+			if len(msgBytes) == 0 {
+				return nil, nil // proto3 zero-value encoding, treat as absent
+			}
+			if len(msgBytes) != size {
+				return nil, errors.New("field has unexpected size")
+			}
+			return msgBytes, nil
+		}
+
+		n := skipField(data[pos:], wireType)
+		if n < 0 {
+			return nil, errors.New("failed to skip field")
+		}
+		pos += n
+	}
+
+	return nil, nil
 }
