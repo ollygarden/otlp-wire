@@ -509,8 +509,11 @@ func forEachResourceSpans(data []byte, fn func([]byte, error) bool) {
 	forEachRepeatedField(data, 1, fn)
 }
 
-// extractResourceMessage extracts the Resource message (field 1) from
-// ResourceMetrics/ResourceLogs/ResourceSpans messages.
+// extractResourceMessage extracts the Resource sub-message (field 1) from a
+// ResourceSpans/ResourceMetrics/ResourceLogs payload. Resource is optional in
+// the OTLP proto schema, so an absent field returns (nil, nil) — the same
+// convention used by extractFixedBytesField. Callers should unmarshal a nil
+// result as an empty Resource{}.
 func extractResourceMessage(data []byte) ([]byte, error) {
 	pos := 0
 
@@ -541,7 +544,7 @@ func extractResourceMessage(data []byte) ([]byte, error) {
 		pos += n
 	}
 
-	return nil, errors.New("resource field not found")
+	return nil, nil
 }
 
 // writeResourceMessage writes resource data as a valid OTLP export request message.

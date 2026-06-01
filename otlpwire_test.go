@@ -1139,8 +1139,9 @@ func TestResourceMetrics_Resource_WrongWireType(t *testing.T) {
 	assert.Contains(t, err.Error(), "wrong wire type")
 }
 
-func TestResourceMetrics_Resource_Missing(t *testing.T) {
-	// Craft ResourceMetrics without Resource field (only ScopeMetrics)
+func TestResourceMetrics_Resource_Absent(t *testing.T) {
+	// Resource is optional in OTLP; absent field 1 must return (nil, nil) so
+	// callers can treat it as an empty Resource without a poison-message loop.
 	buf := []byte{}
 
 	// Field 2 = ScopeMetrics (empty)
@@ -1148,9 +1149,9 @@ func TestResourceMetrics_Resource_Missing(t *testing.T) {
 	buf = protowire.AppendBytes(buf, []byte{})
 
 	rm := ResourceMetrics(buf)
-	_, err := rm.Resource()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	resourceBytes, err := rm.Resource()
+	require.NoError(t, err)
+	assert.Nil(t, resourceBytes)
 }
 
 func TestResourceLogs_Resource_WrongWireType(t *testing.T) {
@@ -1164,15 +1165,15 @@ func TestResourceLogs_Resource_WrongWireType(t *testing.T) {
 	assert.Contains(t, err.Error(), "wrong wire type")
 }
 
-func TestResourceLogs_Resource_Missing(t *testing.T) {
+func TestResourceLogs_Resource_Absent(t *testing.T) {
 	buf := []byte{}
 	buf = protowire.AppendTag(buf, 2, protowire.BytesType)
 	buf = protowire.AppendBytes(buf, []byte{})
 
 	rl := ResourceLogs(buf)
-	_, err := rl.Resource()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	resourceBytes, err := rl.Resource()
+	require.NoError(t, err)
+	assert.Nil(t, resourceBytes)
 }
 
 func TestResourceSpans_Resource_WrongWireType(t *testing.T) {
@@ -1186,15 +1187,15 @@ func TestResourceSpans_Resource_WrongWireType(t *testing.T) {
 	assert.Contains(t, err.Error(), "wrong wire type")
 }
 
-func TestResourceSpans_Resource_Missing(t *testing.T) {
+func TestResourceSpans_Resource_Absent(t *testing.T) {
 	buf := []byte{}
 	buf = protowire.AppendTag(buf, 2, protowire.BytesType)
 	buf = protowire.AppendBytes(buf, []byte{})
 
 	rs := ResourceSpans(buf)
-	_, err := rs.Resource()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	resourceBytes, err := rs.Resource()
+	require.NoError(t, err)
+	assert.Nil(t, resourceBytes)
 }
 
 // ========== Benchmarks ==========
