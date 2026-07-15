@@ -1608,3 +1608,48 @@ func TestDataPointsIteration_EmptyMetric(t *testing.T) {
 	require.NoError(t, errFn())
 	require.Equal(t, 0, count)
 }
+
+func TestDataPointsIteration_EarlyStop(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+
+	// Break after the first datapoint of a metric that has two; the error
+	// func must stay nil and iteration must stop cleanly.
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				seen := 0
+				dpSeq, dpErr := m.DataPoints()
+				for range dpSeq {
+					seen++
+					break
+				}
+				require.NoError(t, dpErr())
+				require.Equal(t, 1, seen)
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+}
+
+func TestDataPointsIteration_CorruptBody(t *testing.T) {
+	// Metric with a gauge body (field 5) whose datapoints field (field 1)
+	// declares a length longer than the remaining bytes.
+	var body []byte
+	body = protowire.AppendTag(body, 1, protowire.BytesType)
+	body = protowire.AppendVarint(body, 100) // claims 100 bytes, none follow
+
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.BytesType)
+	m = protowire.AppendBytes(m, body)
+
+	dpSeq, dpErr := m.DataPoints()
+	for range dpSeq {
+	}
+	require.Error(t, dpErr())
+}
