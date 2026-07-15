@@ -193,3 +193,62 @@ All benchmarks use realistic OTLP data:
 - Full scope information (instrumentation library)
 - Complete metadata (timestamps, attributes)
 - Realistic attribute cardinality
+
+---
+
+## Deep iteration (metrics depth, E-2608)
+
+**Test Setup:**
+- Platform: Apple M4
+- Go version: go1.26.1 darwin/arm64
+- `go test -run '^$' -bench 'BenchmarkMetrics_(Scrape)?DeepIteration' -benchmem -count=5 ./...`
+
+These benchmarks drive the full metrics-depth API (`ResourceMetrics.ScopeMetrics()` →
+`ScopeMetrics.Metrics()` → `Metric.DataPoints()` → `DataPoint.Attributes()`) all the way
+down to individual attribute key/value bytes, and compare it against a full pdata
+unmarshal doing the equivalent walk. This is the "marigold" workload from E-2601:
+for every data point, read the timestamp and consume every attribute's key and value
+bytes (a stand-in for feeding them into a hash function).
+
+Two fixtures are used:
+
+- **Scrape-shaped** (`createScrapeShapedMetrics`): 1 resource, 1 scope, 4,800 metrics,
+  1 data point each, 4 attributes per data point — mirrors real Prometheus-receiver
+  scrape traffic (the E-2601 shape).
+- **Continuity** (`createBenchMetrics`, reused from the existing suite): 5 resources,
+  1 scope each, 1 metric each, 100 data points per metric (500 data points total) —
+  kept for continuity with the other benchmarks in this file.
+
+### Results (median of 5 runs)
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `BenchmarkMetrics_ScrapeDeepIteration_WireFormat` | 806,129 | 460,986 | 19,207 |
+| `BenchmarkMetrics_ScrapeDeepIteration_Unmarshal` | 2,485,069 | 3,507,251 | 105,631 |
+| `BenchmarkMetrics_DeepIteration_WireFormat` | 42,548 | 20,912 | 1,033 |
+| `BenchmarkMetrics_DeepIteration_Unmarshal` | 87,263 | 159,361 | 5,161 |
+
+Speedup (wire format vs. unmarshal, by ns/op):
+
+| Fixture | Speedup |
+|---|---|
+| Scrape-shaped (4,800 metrics × 1 dp × 4 attrs) | 3.08x |
+| Continuity (5 × 1 × 1 × 100 dp) | 2.05x |
+
+Wire format still wins on both time and memory (roughly 4-7x less memory, ~2-5x fewer
+allocations), but the margin is far narrower than the order-of-magnitude speedups seen
+for counting, shallow iteration, and resource extraction elsewhere in this document.
+The reason is structural rather than a benchmark artifact: a memory profile of
+`BenchmarkMetrics_ScrapeDeepIteration_WireFormat` shows essentially all allocations
+(19,207 of them, ~460 KB) coming from the two per-element iterator closures —
+`Metric.DataPoints()` opened once per metric (4,800 times) and `DataPoint.Attributes()`
+opened once per data point (4,800 times), each paying the documented "2 allocations for
+iteration" cost. Shallow operations (counting, single top-level iteration, resource
+extraction) open an iterator once per batch, so that fixed cost is amortized; deep
+iteration opens a fresh iterator at every level for every element, so the allocation
+count scales with the number of metrics/data points rather than staying constant. The
+per-element cost is still tiny (~24 bytes per iterator open, matching the existing
+"2 allocations, 24 bytes" pattern documented above) and wire format remains faster and
+lighter than a full unmarshal at every data point count tested, but it no longer
+benefits from the zero-copy, zero-allocation properties that make the shallow
+operations near-free.
