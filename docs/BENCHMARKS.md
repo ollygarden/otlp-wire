@@ -237,8 +237,10 @@ Speedup (wire format vs. unmarshal, by ns/op):
 | Scrape-shaped, Seq variants (4,800 metrics × 1 dp × 4 attrs) | 3.58x |
 | Continuity (5 × 1 × 1 × 100 dp) | 2.05x |
 
-Wire format still wins on both time and memory (roughly 4-7x less memory, ~2-5x fewer
-allocations), but the margin is far narrower than the order-of-magnitude speedups seen
+Wire format still wins on both time and memory (roughly 7.6x less memory on both
+fixtures — 3,507,250/460,987 and 159,361/20,912 — and ~5.0-5.5x fewer allocations —
+105,631/19,207 and 5,161/1,033 — for the closure-based pair), but the margin is far
+narrower than the order-of-magnitude speedups seen
 for counting, shallow iteration, and resource extraction elsewhere in this document.
 The reason is structural rather than a benchmark artifact: a memory profile of
 `BenchmarkMetrics_ScrapeDeepIteration_WireFormat` shows essentially all allocations
