@@ -33,6 +33,12 @@ type ScopeSpans []byte
 // Span represents a single Span message (raw wire bytes).
 type Span []byte
 
+// ScopeMetrics represents a single ScopeMetrics message (raw wire bytes).
+type ScopeMetrics []byte
+
+// Metric represents a single Metric message (raw wire bytes).
+type Metric []byte
+
 // DataPointCount returns the total number of metric data points in the batch.
 func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
 	return countMetricDataPoints([]byte(m))
@@ -74,6 +80,52 @@ func (r ResourceMetrics) Resource() ([]byte, error) {
 // Implements io.WriterTo interface.
 func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error) {
 	return writeResourceMessage(w, []byte(r))
+}
+
+// ScopeMetrics returns an iterator over ScopeMetrics in this ResourceMetrics.
+// Field 2 in the ResourceMetrics protobuf message.
+// The returned function should be called after iteration to check for errors.
+func (r ResourceMetrics) ScopeMetrics() (iter.Seq[ScopeMetrics], func() error) {
+	var iterErr error
+
+	seq := func(yield func(ScopeMetrics) bool) {
+		forEachRepeatedField([]byte(r), 2, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(ScopeMetrics(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
+// Metrics returns an iterator over Metrics in this ScopeMetrics.
+// Field 2 in the ScopeMetrics protobuf message.
+// The returned function should be called after iteration to check for errors.
+func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error) {
+	var iterErr error
+
+	seq := func(yield func(Metric) bool) {
+		forEachRepeatedField([]byte(s), 2, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(Metric(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
 }
 
 // LogRecordCount returns the total number of log records in the batch.

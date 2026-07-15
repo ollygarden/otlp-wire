@@ -2,6 +2,7 @@ package otlpwire
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1385,4 +1386,64 @@ func BenchmarkLogsData_SplitByResource(b *testing.B) {
 		}
 		_ = getErr()
 	}
+}
+
+// buildScopedMetrics builds a request with the given number of scopes per
+// resource and metrics per scope, all gauges with one datapoint.
+func buildScopedMetrics(t *testing.T, resources, scopes, metricsPerScope int) []byte {
+	t.Helper()
+	metrics := pmetric.NewMetrics()
+	for r := 0; r < resources; r++ {
+		rm := metrics.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("service.name", fmt.Sprintf("service-%d", r))
+		for s := 0; s < scopes; s++ {
+			sm := rm.ScopeMetrics().AppendEmpty()
+			sm.Scope().SetName(fmt.Sprintf("scope-%d", s))
+			for m := 0; m < metricsPerScope; m++ {
+				metric := sm.Metrics().AppendEmpty()
+				metric.SetName(fmt.Sprintf("metric.%d.%d", s, m))
+				dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+				dp.SetIntValue(int64(m))
+				dp.SetTimestamp(1000000000)
+			}
+		}
+	}
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+	return bytes
+}
+
+func TestScopeMetricsIteration(t *testing.T) {
+	bytes := buildScopedMetrics(t, 2, 3, 4)
+	req := ExportMetricsServiceRequest(bytes)
+
+	totalScopes := 0
+	totalMetrics := 0
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			totalScopes++
+			metricSeq, metricErr := sm.Metrics()
+			for range metricSeq {
+				totalMetrics++
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+
+	require.Equal(t, 6, totalScopes)   // 2 resources × 3 scopes
+	require.Equal(t, 24, totalMetrics) // 6 scopes × 4 metrics
+}
+
+func TestScopeMetricsIteration_Malformed(t *testing.T) {
+	// Field 2 (scope_metrics) with wrong wire type: varint instead of bytes.
+	bad := ResourceMetrics{0x10, 0x01}
+	seq, errFn := bad.ScopeMetrics()
+	for range seq {
+	}
+	require.Error(t, errFn())
 }
