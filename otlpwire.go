@@ -65,6 +65,64 @@ func (d DataPoint) Raw() []byte { return d.raw }
 // Type returns the metric type this datapoint came from.
 func (d DataPoint) Type() MetricType { return d.typ }
 
+// KeyValue represents a single KeyValue message (raw wire bytes).
+type KeyValue []byte
+
+// Key returns the attribute key (field 1) as a view into the underlying
+// buffer. Returns nil if the field is not present.
+func (kv KeyValue) Key() ([]byte, error) {
+	return extractBytesField([]byte(kv), 1)
+}
+
+// ValueRaw returns the raw AnyValue message bytes (field 2) as a view into
+// the underlying buffer, suitable for type-tagged hashing.
+// Returns nil if the field is not present.
+func (kv KeyValue) ValueRaw() ([]byte, error) {
+	return extractBytesField([]byte(kv), 2)
+}
+
+// attributesFieldNum returns the field number of the repeated KeyValue
+// attributes for each datapoint message type.
+func (d DataPoint) attributesFieldNum() protowire.Number {
+	switch d.typ {
+	case MetricTypeHistogram:
+		return 9
+	case MetricTypeExponentialHistogram:
+		return 1
+	default: // NumberDataPoint (gauge, sum) and SummaryDataPoint
+		return 7
+	}
+}
+
+// Timestamp returns the datapoint's time_unix_nano (field 3, fixed64).
+// Returns 0 if the field is not present.
+func (d DataPoint) Timestamp() (uint64, error) {
+	return extractFixed64Field(d.raw, 3)
+}
+
+// Attributes returns an iterator over the datapoint's attribute KeyValues.
+// The returned function should be called after iteration to check for errors.
+func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error) {
+	var iterErr error
+	fieldNum := d.attributesFieldNum()
+
+	seq := func(yield func(KeyValue) bool) {
+		forEachRepeatedField(d.raw, fieldNum, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(KeyValue(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
 // DataPointCount returns the total number of metric data points in the batch.
 func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
 	return countMetricDataPoints([]byte(m))
@@ -725,6 +783,39 @@ func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+// extractFixed64Field extracts the first occurrence of a fixed64 field from
+// protobuf data. Returns 0 (not an error) if absent.
+func extractFixed64Field(data []byte, fieldNum protowire.Number) (uint64, error) {
+	pos := 0
+
+	for pos < len(data) {
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			return 0, errors.New("malformed protobuf tag")
+		}
+		pos += tagLen
+
+		if num == fieldNum {
+			if wireType != protowire.Fixed64Type {
+				return 0, errors.New("wrong wire type for field")
+			}
+			v, n := protowire.ConsumeFixed64(data[pos:])
+			if n < 0 {
+				return 0, errors.New("invalid fixed64 in field")
+			}
+			return v, nil
+		}
+
+		n := skipField(data[pos:], wireType)
+		if n < 0 {
+			return 0, errors.New("failed to skip field")
+		}
+		pos += n
+	}
+
+	return 0, nil
 }
 
 // writeResourceMessage writes resource data as a valid OTLP export request message.

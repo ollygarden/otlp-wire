@@ -1653,3 +1653,67 @@ func TestDataPointsIteration_CorruptBody(t *testing.T) {
 	}
 	require.Error(t, dpErr())
 }
+
+func TestDataPointTimestampAndAttributes_AllTypes(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+
+	// Expected AnyValue wire bytes for string values, built independently.
+	anyValueStr := func(s string) []byte {
+		var b []byte
+		b = protowire.AppendTag(b, 1, protowire.BytesType) // AnyValue.string_value = 1
+		b = protowire.AppendBytes(b, []byte(s))
+		return b
+	}
+	expected := map[string][]byte{
+		"method": anyValueStr("GET"),
+		"status": anyValueStr("200"),
+	}
+
+	checked := 0
+	forEachTestDataPoint(t, bytes, func(name string, dp DataPoint) {
+		ts, err := dp.Timestamp()
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000000000), ts)
+
+		attrs := map[string][]byte{}
+		attrSeq, attrErr := dp.Attributes()
+		for kv := range attrSeq {
+			key, err := kv.Key()
+			require.NoError(t, err)
+			val, err := kv.ValueRaw()
+			require.NoError(t, err)
+			attrs[string(key)] = val
+		}
+		require.NoError(t, attrErr())
+		require.Equal(t, expected, attrs, "metric %s", name)
+		checked++
+	})
+	require.Equal(t, 10, checked) // 5 types × 2 datapoints
+}
+
+func TestDataPointAttributes_Empty(t *testing.T) {
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("no.attrs")
+	dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+	dp.SetIntValue(1)
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+
+	forEachTestDataPoint(t, bytes, func(name string, dp DataPoint) {
+		ts, err := dp.Timestamp()
+		require.NoError(t, err)
+		require.Zero(t, ts)
+
+		count := 0
+		attrSeq, attrErr := dp.Attributes()
+		for range attrSeq {
+			count++
+		}
+		require.NoError(t, attrErr())
+		require.Zero(t, count)
+	})
+}
