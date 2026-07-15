@@ -128,6 +128,12 @@ func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error) {
 	return seq, errFunc
 }
 
+// Name returns the metric name (field 1) as a view into the underlying
+// buffer. Returns nil if the field is not present.
+func (m Metric) Name() ([]byte, error) {
+	return extractBytesField([]byte(m), 1)
+}
+
 // LogRecordCount returns the total number of log records in the batch.
 func (l ExportLogsServiceRequest) LogRecordCount() (int, error) {
 	return countLogRecords([]byte(l))
@@ -594,6 +600,40 @@ func extractResourceMessage(data []byte) ([]byte, error) {
 	}
 
 	return nil, errors.New("resource field not found")
+}
+
+// extractBytesField extracts the first occurrence of a length-delimited
+// field from protobuf data. Returns nil (not an error) if absent.
+// The returned slice aliases data; no copy is made.
+func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
+	pos := 0
+
+	for pos < len(data) {
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			return nil, errors.New("malformed protobuf tag")
+		}
+		pos += tagLen
+
+		if num == fieldNum {
+			if wireType != protowire.BytesType {
+				return nil, errors.New("wrong wire type for field")
+			}
+			msgBytes, n := protowire.ConsumeBytes(data[pos:])
+			if n < 0 {
+				return nil, errors.New("invalid bytes in field")
+			}
+			return msgBytes, nil
+		}
+
+		n := skipField(data[pos:], wireType)
+		if n < 0 {
+			return nil, errors.New("failed to skip field")
+		}
+		pos += n
+	}
+
+	return nil, nil
 }
 
 // writeResourceMessage writes resource data as a valid OTLP export request message.

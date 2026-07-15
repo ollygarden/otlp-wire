@@ -1447,3 +1447,37 @@ func TestScopeMetricsIteration_Malformed(t *testing.T) {
 	}
 	require.Error(t, errFn())
 }
+
+func TestMetricName(t *testing.T) {
+	bytes := buildScopedMetrics(t, 1, 1, 2)
+	req := ExportMetricsServiceRequest(bytes)
+
+	var names []string
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				name, err := m.Name()
+				require.NoError(t, err)
+				names = append(names, string(name))
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+
+	require.Equal(t, []string{"metric.0.0", "metric.0.1"}, names)
+}
+
+func TestMetricName_Absent(t *testing.T) {
+	// A metric message with only a unit (field 3), no name.
+	var m Metric
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendBytes(m, []byte("1"))
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Nil(t, name)
+}
