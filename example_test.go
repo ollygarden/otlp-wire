@@ -98,6 +98,44 @@ func Example_typeComposition() {
 	// Number of resources: 1
 }
 
+// ExampleMetric_DataPoints demonstrates walking the metrics-depth API down to
+// individual data point attributes.
+func ExampleMetric_DataPoints() {
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("request.duration")
+	dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+	dp.SetDoubleValue(0.35)
+	dp.SetTimestamp(1000000000)
+	dp.Attributes().PutStr("method", "GET")
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	data, _ := marshaler.MarshalMetrics(metrics)
+
+	req := otlpwire.ExportMetricsServiceRequest(data)
+	resources, _ := req.ResourceMetrics()
+	for rm := range resources {
+		scopes, _ := rm.ScopeMetrics()
+		for sm := range scopes {
+			metricsSeq, _ := sm.Metrics()
+			for m := range metricsSeq {
+				name, _ := m.Name()
+				dps, _ := m.DataPoints()
+				for dp := range dps {
+					ts, _ := dp.Timestamp()
+					attrs, _ := dp.Attributes()
+					for kv := range attrs {
+						key, _ := kv.Key()
+						fmt.Printf("%s ts=%d attr=%s\n", name, ts, key)
+					}
+				}
+			}
+		}
+	}
+	// Output: request.duration ts=1000000000 attr=method
+}
+
 // Helper functions
 
 func createSampleMetrics(dataPoints int) pmetric.Metrics {
