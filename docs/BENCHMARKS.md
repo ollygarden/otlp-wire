@@ -251,8 +251,9 @@ iteration" cost. Shallow operations (counting, single top-level iteration, resou
 extraction) open an iterator once per batch, so that fixed cost is amortized; deep
 iteration opens a fresh iterator at every level for every element, so the allocation
 count scales with the number of metrics/data points rather than staying constant. The
-per-element cost is still tiny (~24 bytes per iterator open, matching the existing
-"2 allocations, 24 bytes" pattern documented above) and wire format remains faster and
+per-element cost is still tiny (~48 bytes, i.e. 2 allocations of ~24 bytes, per
+iterator open, matching the existing "2 allocations, 24 bytes" pattern documented
+above) and wire format remains faster and
 lighter than a full unmarshal at every data point count tested, but it no longer
 benefits from the zero-copy, zero-allocation properties that make the shallow
 operations near-free.

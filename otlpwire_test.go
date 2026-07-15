@@ -1654,6 +1654,41 @@ func TestDataPointsIteration_CorruptBody(t *testing.T) {
 	require.Error(t, dpErr())
 }
 
+func TestDataPointsIteration_WrongWireTypeBody(t *testing.T) {
+	// Gauge oneof (field 5) encoded as varint instead of bytes.
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.VarintType)
+	m = protowire.AppendVarint(m, 1)
+
+	seq, errFn := m.DataPoints()
+	for range seq {
+	}
+	require.Error(t, errFn())
+}
+
+func TestDataPointsSeq_WrongWireTypeBody(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.VarintType)
+	m = protowire.AppendVarint(m, 1)
+
+	sawErr := false
+	for _, err := range m.DataPointsSeq {
+		if err != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr)
+}
+
+func TestDataPointTimestamp_WrongWireType(t *testing.T) {
+	var raw []byte
+	raw = protowire.AppendTag(raw, 3, protowire.BytesType)
+	raw = protowire.AppendBytes(raw, []byte("xx"))
+	dp := DataPoint{raw: raw, typ: MetricTypeGauge}
+	_, err := dp.Timestamp()
+	require.Error(t, err)
+}
+
 func TestDataPointTimestampAndAttributes_AllTypes(t *testing.T) {
 	bytes := buildAllTypesMetrics(t)
 

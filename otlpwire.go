@@ -240,59 +240,21 @@ func (m Metric) Name() ([]byte, error) {
 // DataPoints returns an iterator over datapoints in this Metric, descending
 // whichever oneof body is present (gauge 5, sum 7, histogram 9,
 // exponential_histogram 10, summary 11). Each body holds its datapoints in
-// field 1.
+// field 1. If a malformed metric carries more than one oneof body,
+// datapoints from each are yielded, each tagged with its own type.
 // The returned function should be called after iteration to check for errors.
+// DataPoints is a thin adapter over DataPointsSeq.
 func (m Metric) DataPoints() (iter.Seq[DataPoint], func() error) {
 	var iterErr error
 
 	seq := func(yield func(DataPoint) bool) {
-		data := []byte(m)
-		pos := 0
-
-		for pos < len(data) {
-			fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-			if tagLen < 0 {
-				iterErr = errors.New("malformed protobuf tag in metric")
-				return
+		m.DataPointsSeq(func(dp DataPoint, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
 			}
-			pos += tagLen
-
-			typ := MetricType(fieldNum)
-			isBody := typ == MetricTypeGauge || typ == MetricTypeSum ||
-				typ == MetricTypeHistogram || typ == MetricTypeExponentialHistogram ||
-				typ == MetricTypeSummary
-			if isBody && wireType == protowire.BytesType {
-				body, n := protowire.ConsumeBytes(data[pos:])
-				if n < 0 {
-					iterErr = errors.New("invalid bytes in metric data")
-					return
-				}
-				pos += n
-
-				stopped := false
-				forEachRepeatedField(body, 1, func(dpBytes []byte, err error) bool {
-					if err != nil {
-						iterErr = err
-						return false
-					}
-					if !yield(DataPoint{raw: dpBytes, typ: typ}) {
-						stopped = true
-						return false
-					}
-					return true
-				})
-				if iterErr != nil || stopped {
-					return
-				}
-			} else {
-				n := skipField(data[pos:], wireType)
-				if n < 0 {
-					iterErr = errors.New("failed to skip field")
-					return
-				}
-				pos += n
-			}
-		}
+			return yield(dp)
+		})
 	}
 
 	errFunc := func() error {
@@ -312,7 +274,8 @@ func (m Metric) DataPoints() (iter.Seq[DataPoint], func() error) {
 //
 // On a parse error it yields a zero DataPoint with a non-nil error and
 // stops. Unlike DataPoints, no closures escape, so iterating allocates
-// nothing.
+// nothing. If a malformed metric carries more than one oneof body,
+// datapoints from each are yielded, each tagged with its own type.
 func (m Metric) DataPointsSeq(yield func(DataPoint, error) bool) {
 	data := []byte(m)
 	pos := 0
@@ -329,7 +292,11 @@ func (m Metric) DataPointsSeq(yield func(DataPoint, error) bool) {
 		isBody := typ == MetricTypeGauge || typ == MetricTypeSum ||
 			typ == MetricTypeHistogram || typ == MetricTypeExponentialHistogram ||
 			typ == MetricTypeSummary
-		if isBody && wireType == protowire.BytesType {
+		if isBody && wireType != protowire.BytesType {
+			yield(DataPoint{}, errors.New("wrong wire type for metric data"))
+			return
+		}
+		if isBody {
 			body, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
 				yield(DataPoint{}, errors.New("invalid bytes in metric data"))
