@@ -692,6 +692,73 @@ func BenchmarkMetrics_ScrapeDeepIteration_Unmarshal(b *testing.B) {
 	}
 }
 
+// deepIterateWireSeq is deepIterateWire using the zero-allocation Seq
+// variants for the two per-element levels.
+func deepIterateWireSeq(b *testing.B, req ExportMetricsServiceRequest) (datapoints int, consumed int) {
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				for dp, err := range m.DataPointsSeq {
+					if err != nil {
+						b.Fatal(err)
+					}
+					datapoints++
+					ts, err := dp.Timestamp()
+					if err != nil {
+						b.Fatal(err)
+					}
+					consumed += int(ts % 2)
+					for kv, err := range dp.AttributesSeq {
+						if err != nil {
+							b.Fatal(err)
+						}
+						key, err := kv.Key()
+						if err != nil {
+							b.Fatal(err)
+						}
+						val, err := kv.ValueRaw()
+						if err != nil {
+							b.Fatal(err)
+						}
+						consumed += len(key) + len(val)
+					}
+				}
+			}
+			if err := metricErr(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := scopeErr(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := resErr(); err != nil {
+		b.Fatal(err)
+	}
+	return datapoints, consumed
+}
+
+func BenchmarkMetrics_ScrapeDeepIterationSeq_WireFormat(b *testing.B) {
+	data := createScrapeShapedMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	req := ExportMetricsServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		datapoints, _ := deepIterateWireSeq(b, req)
+		if datapoints != 4800 {
+			b.Fatalf("expected 4800 datapoints, got %d", datapoints)
+		}
+	}
+}
+
 // Continuity pair on the existing 5×100 fixture.
 
 func BenchmarkMetrics_DeepIteration_WireFormat(b *testing.B) {

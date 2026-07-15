@@ -113,3 +113,23 @@ for continuity with the current benchmark suite. Results table goes into
 
 Success criterion: wire path shows an order-of-magnitude (target 20–50×)
 reduction in ns/op and allocs vs the pdata path on the scrape-shaped fixture.
+
+## Addendum (2026-07-15): zero-alloc Seq variants
+
+The scrape-shaped benchmark measured 19,207 allocs/op on the wire path,
+~99.8% of it coming from the `(iter.Seq[T], func() error)` pattern's 2
+heap allocations per iterator open, paid once per metric (`DataPoints()`)
+and once per datapoint (`Attributes()`) — the two hot, per-element levels
+of deep iteration. This capped the wire-format speedup vs. a full pdata
+unmarshal at ~2.7x, far short of the order-of-magnitude target. With user
+approval, scope was extended to add `Metric.DataPointsSeq` and
+`DataPoint.AttributesSeq` as additive, zero-allocation alternatives shaped
+as `iter.Seq2[T, error]` methods (range-over-func targets), leaving the
+original closure-based pattern unchanged for the rest of the API. Errors
+are yielded inline as the second range value rather than through a
+separate `func() error`, and because the method value never escapes, the
+compiler keeps the entire walk on the stack. The result:
+`TestDataPointsSeq_ZeroAlloc` confirms 0 allocations via
+`testing.AllocsPerRun`, and the scrape-shaped benchmark drops from 19,207
+to 7 allocs/op (only the three outer, per-batch iterator opens remain),
+improving the speedup vs. unmarshal from ~2.7x to ~3.6x.

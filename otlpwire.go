@@ -123,6 +123,25 @@ func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error) {
 	return seq, errFunc
 }
 
+// AttributesSeq is a zero-allocation alternative to Attributes. It has the
+// shape of an iter.Seq2[KeyValue, error] and is meant to be ranged over
+// directly:
+//
+//	for kv, err := range dp.AttributesSeq {
+//		if err != nil { ... }
+//	}
+//
+// On a parse error it yields a nil KeyValue with a non-nil error and stops.
+func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool) {
+	forEachRepeatedField(d.raw, d.attributesFieldNum(), func(rb []byte, err error) bool {
+		if err != nil {
+			yield(nil, err)
+			return false
+		}
+		return yield(KeyValue(rb), nil)
+	})
+}
+
 // DataPointCount returns the total number of metric data points in the batch.
 func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
 	return countMetricDataPoints([]byte(m))
@@ -281,6 +300,68 @@ func (m Metric) DataPoints() (iter.Seq[DataPoint], func() error) {
 	}
 
 	return seq, errFunc
+}
+
+// DataPointsSeq is a zero-allocation alternative to DataPoints. It has the
+// shape of an iter.Seq2[DataPoint, error] and is meant to be ranged over
+// directly:
+//
+//	for dp, err := range m.DataPointsSeq {
+//		if err != nil { ... }
+//	}
+//
+// On a parse error it yields a zero DataPoint with a non-nil error and
+// stops. Unlike DataPoints, no closures escape, so iterating allocates
+// nothing.
+func (m Metric) DataPointsSeq(yield func(DataPoint, error) bool) {
+	data := []byte(m)
+	pos := 0
+
+	for pos < len(data) {
+		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			yield(DataPoint{}, errors.New("malformed protobuf tag in metric"))
+			return
+		}
+		pos += tagLen
+
+		typ := MetricType(fieldNum)
+		isBody := typ == MetricTypeGauge || typ == MetricTypeSum ||
+			typ == MetricTypeHistogram || typ == MetricTypeExponentialHistogram ||
+			typ == MetricTypeSummary
+		if isBody && wireType == protowire.BytesType {
+			body, n := protowire.ConsumeBytes(data[pos:])
+			if n < 0 {
+				yield(DataPoint{}, errors.New("invalid bytes in metric data"))
+				return
+			}
+			pos += n
+
+			done := false
+			forEachRepeatedField(body, 1, func(dpBytes []byte, err error) bool {
+				if err != nil {
+					done = true
+					yield(DataPoint{}, err)
+					return false
+				}
+				if !yield(DataPoint{raw: dpBytes, typ: typ}, nil) {
+					done = true
+					return false
+				}
+				return true
+			})
+			if done {
+				return
+			}
+		} else {
+			n := skipField(data[pos:], wireType)
+			if n < 0 {
+				yield(DataPoint{}, errors.New("failed to skip field"))
+				return
+			}
+			pos += n
+		}
+	}
 }
 
 // LogRecordCount returns the total number of log records in the batch.

@@ -223,8 +223,9 @@ Two fixtures are used:
 
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| `BenchmarkMetrics_ScrapeDeepIteration_WireFormat` | 806,129 | 460,986 | 19,207 |
-| `BenchmarkMetrics_ScrapeDeepIteration_Unmarshal` | 2,485,069 | 3,507,251 | 105,631 |
+| `BenchmarkMetrics_ScrapeDeepIteration_WireFormat` | 827,544 | 460,987 | 19,207 |
+| `BenchmarkMetrics_ScrapeDeepIterationSeq_WireFormat` | 634,474 | 184 | 7 |
+| `BenchmarkMetrics_ScrapeDeepIteration_Unmarshal` | 2,268,745 | 3,507,250 | 105,631 |
 | `BenchmarkMetrics_DeepIteration_WireFormat` | 42,548 | 20,912 | 1,033 |
 | `BenchmarkMetrics_DeepIteration_Unmarshal` | 87,263 | 159,361 | 5,161 |
 
@@ -232,7 +233,8 @@ Speedup (wire format vs. unmarshal, by ns/op):
 
 | Fixture | Speedup |
 |---|---|
-| Scrape-shaped (4,800 metrics × 1 dp × 4 attrs) | 3.08x |
+| Scrape-shaped, closure-based (4,800 metrics × 1 dp × 4 attrs) | 2.74x |
+| Scrape-shaped, Seq variants (4,800 metrics × 1 dp × 4 attrs) | 3.58x |
 | Continuity (5 × 1 × 1 × 100 dp) | 2.05x |
 
 Wire format still wins on both time and memory (roughly 4-7x less memory, ~2-5x fewer
@@ -252,3 +254,26 @@ per-element cost is still tiny (~24 bytes per iterator open, matching the existi
 lighter than a full unmarshal at every data point count tested, but it no longer
 benefits from the zero-copy, zero-allocation properties that make the shallow
 operations near-free.
+
+### Zero-alloc Seq variants (`DataPointsSeq` / `AttributesSeq`)
+
+The library exposes two APIs at the two hot levels of deep iteration:
+
+- **`(iter.Seq[T], func() error)`** — the original, ergonomic pattern used everywhere
+  else in this library (`ResourceMetrics()`, `ScopeMetrics()`, `Metrics()`, `DataPoints()`,
+  `Attributes()`). Two allocations per iterator open; fine when the level is opened once
+  per batch/scope, but costly when opened once per metric or per data point.
+- **`Metric.DataPointsSeq` / `DataPoint.AttributesSeq`** — additive, zero-allocation
+  variants shaped as `iter.Seq2[T, error]` methods, meant to be ranged over directly
+  (`for dp, err := range m.DataPointsSeq`). Because the method value never escapes to
+  the heap, the compiler keeps the walk entirely on the stack. Errors are yielded
+  inline as the second range value instead of via a separate `func() error`.
+
+`BenchmarkMetrics_ScrapeDeepIterationSeq_WireFormat` confirms the effect: allocations on
+the 4,800-metric scrape fixture drop from 19,207 to 7 (only the three outer
+`ResourceMetrics()`/`ScopeMetrics()`/`Metrics()` opens remain, one per batch/scope, not
+per element), B/op drops from ~461 KB to 184 B, and the speedup vs. a full pdata
+unmarshal improves from 2.74x to 3.58x. Use the closure-based pattern for outer,
+amortized levels and general iteration; use the Seq variants specifically for
+`DataPoints()`/`Attributes()` in code paths that iterate every metric or every data
+point in a batch, such as scrape-shaped or high-cardinality workloads.

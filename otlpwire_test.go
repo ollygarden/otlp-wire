@@ -1717,3 +1717,160 @@ func TestDataPointAttributes_Empty(t *testing.T) {
 		require.Zero(t, count)
 	})
 }
+
+func TestDataPointsSeq_AllTypes(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+	req := ExportMetricsServiceRequest(bytes)
+
+	// Expected AnyValue wire bytes for string values, built independently.
+	anyValueStr := func(s string) []byte {
+		var b []byte
+		b = protowire.AppendTag(b, 1, protowire.BytesType)
+		b = protowire.AppendBytes(b, []byte(s))
+		return b
+	}
+	expected := map[string][]byte{
+		"method": anyValueStr("GET"),
+		"status": anyValueStr("200"),
+	}
+
+	typeByMetric := map[string]MetricType{}
+	checked := 0
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				name, err := m.Name()
+				require.NoError(t, err)
+				for dp, err := range m.DataPointsSeq {
+					require.NoError(t, err)
+					typeByMetric[string(name)] = dp.Type()
+
+					ts, err := dp.Timestamp()
+					require.NoError(t, err)
+					require.Equal(t, uint64(1000000000), ts)
+
+					attrs := map[string][]byte{}
+					for kv, err := range dp.AttributesSeq {
+						require.NoError(t, err)
+						key, err := kv.Key()
+						require.NoError(t, err)
+						val, err := kv.ValueRaw()
+						require.NoError(t, err)
+						attrs[string(key)] = val
+					}
+					require.Equal(t, expected, attrs, "metric %s", name)
+					checked++
+				}
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+
+	require.Equal(t, 10, checked) // 5 types × 2 datapoints
+	require.Equal(t, map[string]MetricType{
+		"test.gauge":        MetricTypeGauge,
+		"test.sum":          MetricTypeSum,
+		"test.histogram":    MetricTypeHistogram,
+		"test.exphistogram": MetricTypeExponentialHistogram,
+		"test.summary":      MetricTypeSummary,
+	}, typeByMetric)
+}
+
+func TestDataPointsSeq_EarlyStop(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+	forEachTestDataPoint(t, bytes, func(_ string, _ DataPoint) {})
+
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				seen := 0
+				for _, err := range m.DataPointsSeq {
+					require.NoError(t, err)
+					seen++
+					break
+				}
+				require.Equal(t, 1, seen) // every metric has 2 datapoints
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+}
+
+func TestDataPointsSeq_CorruptBody(t *testing.T) {
+	// Gauge body (field 5) whose datapoints field (field 1) declares a
+	// length longer than the remaining bytes.
+	var body []byte
+	body = protowire.AppendTag(body, 1, protowire.BytesType)
+	body = protowire.AppendVarint(body, 100)
+
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.BytesType)
+	m = protowire.AppendBytes(m, body)
+
+	sawErr := false
+	for _, err := range m.DataPointsSeq {
+		if err != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr)
+}
+
+func TestDataPointsSeq_ZeroAlloc(t *testing.T) {
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("alloc.test")
+	dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+	dp.SetIntValue(1)
+	dp.SetTimestamp(1000000000)
+	dp.Attributes().PutStr("method", "GET")
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+
+	var metricBytes Metric
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for s := range scopeSeq {
+			metricSeq, metricErr := s.Metrics()
+			for m := range metricSeq {
+				metricBytes = m
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+	require.NotEmpty(t, metricBytes)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		for dp, err := range metricBytes.DataPointsSeq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			for kv, err := range dp.AttributesSeq {
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = kv.Key()
+				_, _ = kv.ValueRaw()
+			}
+		}
+	})
+	require.Zero(t, allocs, "DataPointsSeq/AttributesSeq must not allocate")
+}
