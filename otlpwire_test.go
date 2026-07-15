@@ -1481,3 +1481,130 @@ func TestMetricName_Absent(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, name)
 }
+
+// buildAllTypesMetrics builds one metric of each of the five types, each
+// with two datapoints carrying attributes {"method":"GET","status":"200"}
+// and timestamp 1000000000.
+func buildAllTypesMetrics(t *testing.T) []byte {
+	t.Helper()
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+
+	setNumberDP := func(dp pmetric.NumberDataPoint) {
+		dp.SetIntValue(42)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	gauge := sm.Metrics().AppendEmpty()
+	gauge.SetName("test.gauge")
+	setNumberDP(gauge.SetEmptyGauge().DataPoints().AppendEmpty())
+	setNumberDP(gauge.Gauge().DataPoints().AppendEmpty())
+
+	sum := sm.Metrics().AppendEmpty()
+	sum.SetName("test.sum")
+	setNumberDP(sum.SetEmptySum().DataPoints().AppendEmpty())
+	setNumberDP(sum.Sum().DataPoints().AppendEmpty())
+
+	hist := sm.Metrics().AppendEmpty()
+	hist.SetName("test.histogram")
+	histBody := hist.SetEmptyHistogram()
+	for i := 0; i < 2; i++ {
+		dp := histBody.DataPoints().AppendEmpty()
+		dp.SetCount(10)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	expHist := sm.Metrics().AppendEmpty()
+	expHist.SetName("test.exphistogram")
+	expHistBody := expHist.SetEmptyExponentialHistogram()
+	for i := 0; i < 2; i++ {
+		dp := expHistBody.DataPoints().AppendEmpty()
+		dp.SetCount(10)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	summary := sm.Metrics().AppendEmpty()
+	summary.SetName("test.summary")
+	summaryBody := summary.SetEmptySummary()
+	for i := 0; i < 2; i++ {
+		dp := summaryBody.DataPoints().AppendEmpty()
+		dp.SetCount(10)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+	return bytes
+}
+
+// forEachTestDataPoint iterates all datapoints in a marshaled request,
+// failing the test on any iterator error.
+func forEachTestDataPoint(t *testing.T, bytes []byte, fn func(metricName string, dp DataPoint)) {
+	t.Helper()
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				name, err := m.Name()
+				require.NoError(t, err)
+				dpSeq, dpErr := m.DataPoints()
+				for dp := range dpSeq {
+					fn(string(name), dp)
+				}
+				require.NoError(t, dpErr())
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+}
+
+func TestDataPointsIteration_AllTypes(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+
+	typeByMetric := map[string]MetricType{}
+	countByMetric := map[string]int{}
+	forEachTestDataPoint(t, bytes, func(name string, dp DataPoint) {
+		typeByMetric[name] = dp.Type()
+		countByMetric[name]++
+		require.NotEmpty(t, dp.Raw())
+	})
+
+	require.Equal(t, map[string]MetricType{
+		"test.gauge":        MetricTypeGauge,
+		"test.sum":          MetricTypeSum,
+		"test.histogram":    MetricTypeHistogram,
+		"test.exphistogram": MetricTypeExponentialHistogram,
+		"test.summary":      MetricTypeSummary,
+	}, typeByMetric)
+	for name, count := range countByMetric {
+		require.Equal(t, 2, count, "metric %s", name)
+	}
+}
+
+func TestDataPointsIteration_EmptyMetric(t *testing.T) {
+	// Metric with a name but no oneof body.
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendBytes(m, []byte("empty"))
+	seq, errFn := m.DataPoints()
+	count := 0
+	for range seq {
+		count++
+	}
+	require.NoError(t, errFn())
+	require.Equal(t, 0, count)
+}

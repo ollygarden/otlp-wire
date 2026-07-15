@@ -39,6 +39,32 @@ type ScopeMetrics []byte
 // Metric represents a single Metric message (raw wire bytes).
 type Metric []byte
 
+// MetricType identifies which oneof body a DataPoint came from.
+type MetricType int
+
+// Metric oneof body field numbers in the Metric protobuf message.
+const (
+	MetricTypeGauge                MetricType = 5
+	MetricTypeSum                  MetricType = 7
+	MetricTypeHistogram            MetricType = 9
+	MetricTypeExponentialHistogram MetricType = 10
+	MetricTypeSummary              MetricType = 11
+)
+
+// DataPoint represents a single datapoint message (raw wire bytes) together
+// with the metric type it came from. The type is needed because the
+// attributes field number differs between datapoint message types.
+type DataPoint struct {
+	raw []byte
+	typ MetricType
+}
+
+// Raw returns the raw datapoint message bytes.
+func (d DataPoint) Raw() []byte { return d.raw }
+
+// Type returns the metric type this datapoint came from.
+func (d DataPoint) Type() MetricType { return d.typ }
+
 // DataPointCount returns the total number of metric data points in the batch.
 func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
 	return countMetricDataPoints([]byte(m))
@@ -132,6 +158,71 @@ func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error) {
 // buffer. Returns nil if the field is not present.
 func (m Metric) Name() ([]byte, error) {
 	return extractBytesField([]byte(m), 1)
+}
+
+// DataPoints returns an iterator over datapoints in this Metric, descending
+// whichever oneof body is present (gauge 5, sum 7, histogram 9,
+// exponential_histogram 10, summary 11). Each body holds its datapoints in
+// field 1.
+// The returned function should be called after iteration to check for errors.
+func (m Metric) DataPoints() (iter.Seq[DataPoint], func() error) {
+	var iterErr error
+
+	seq := func(yield func(DataPoint) bool) {
+		data := []byte(m)
+		pos := 0
+
+		for pos < len(data) {
+			fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+			if tagLen < 0 {
+				iterErr = errors.New("malformed protobuf tag in metric")
+				return
+			}
+			pos += tagLen
+
+			typ := MetricType(fieldNum)
+			isBody := typ == MetricTypeGauge || typ == MetricTypeSum ||
+				typ == MetricTypeHistogram || typ == MetricTypeExponentialHistogram ||
+				typ == MetricTypeSummary
+			if isBody && wireType == protowire.BytesType {
+				body, n := protowire.ConsumeBytes(data[pos:])
+				if n < 0 {
+					iterErr = errors.New("invalid bytes in metric data")
+					return
+				}
+				pos += n
+
+				stopped := false
+				forEachRepeatedField(body, 1, func(dpBytes []byte, err error) bool {
+					if err != nil {
+						iterErr = err
+						return false
+					}
+					if !yield(DataPoint{raw: dpBytes, typ: typ}) {
+						stopped = true
+						return false
+					}
+					return true
+				})
+				if iterErr != nil || stopped {
+					return
+				}
+			} else {
+				n := skipField(data[pos:], wireType)
+				if n < 0 {
+					iterErr = errors.New("failed to skip field")
+					return
+				}
+				pos += n
+			}
+		}
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
 }
 
 // LogRecordCount returns the total number of log records in the batch.
