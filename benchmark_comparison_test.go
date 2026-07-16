@@ -1,6 +1,7 @@
 package otlpwire
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -523,5 +524,269 @@ func BenchmarkMetrics_ResourceExtraction_Unmarshal(b *testing.B) {
 		for ri := 0; ri < metrics.ResourceMetrics().Len(); ri++ {
 			_ = metrics.ResourceMetrics().At(ri).Resource()
 		}
+	}
+}
+
+// ========== Metrics: Deep Iteration (E-2608, marigold workload) ==========
+
+// createScrapeShapedMetrics mirrors the traffic shape from E-2601: one
+// resource, one scope, thousands of metrics with a single datapoint each.
+func createScrapeShapedMetrics() pmetric.Metrics {
+	metrics := pmetric.NewMetrics()
+	rm := metrics.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("service.name", "scraped-service")
+	rm.Resource().Attributes().PutStr("host.name", "host-1")
+	sm := rm.ScopeMetrics().AppendEmpty()
+	sm.Scope().SetName("prometheus-receiver")
+
+	for i := 0; i < 4800; i++ {
+		metric := sm.Metrics().AppendEmpty()
+		metric.SetName(fmt.Sprintf("process_metric_%d_total", i))
+		var dp pmetric.NumberDataPoint
+		if i%2 == 0 {
+			dp = metric.SetEmptyGauge().DataPoints().AppendEmpty()
+		} else {
+			sum := metric.SetEmptySum()
+			sum.SetIsMonotonic(true)
+			sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+			dp = sum.DataPoints().AppendEmpty()
+		}
+		dp.SetDoubleValue(float64(i))
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("job", "node-exporter")
+		dp.Attributes().PutStr("instance", fmt.Sprintf("10.0.0.%d:9100", i%250))
+		dp.Attributes().PutStr("le", "0.5")
+		dp.Attributes().PutStr("quantile", "0.99")
+	}
+	return metrics
+}
+
+// deepIterateWire simulates marigold's zero-copy hashing workload: visit
+// every datapoint, read the timestamp, and consume every attribute's key
+// and raw AnyValue bytes (stand-in for feeding them to xxh3).
+func deepIterateWire(b *testing.B, req ExportMetricsServiceRequest) (datapoints int, consumed int) {
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				dpSeq, dpErr := m.DataPoints()
+				for dp := range dpSeq {
+					datapoints++
+					ts, err := dp.Timestamp()
+					if err != nil {
+						b.Fatal(err)
+					}
+					consumed += int(ts % 2)
+					attrSeq, attrErr := dp.Attributes()
+					for kv := range attrSeq {
+						key, err := kv.Key()
+						if err != nil {
+							b.Fatal(err)
+						}
+						val, err := kv.ValueRaw()
+						if err != nil {
+							b.Fatal(err)
+						}
+						consumed += len(key) + len(val)
+					}
+					if err := attrErr(); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := dpErr(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := metricErr(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := scopeErr(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := resErr(); err != nil {
+		b.Fatal(err)
+	}
+	return datapoints, consumed
+}
+
+// deepIteratePdata is the equivalent workload through pdata: full unmarshal,
+// visit every datapoint, and re-serialize each datapoint's attributes into a
+// buffer for hashing (what marigold does today).
+func deepIteratePdata(b *testing.B, unmarshaler *pmetric.ProtoUnmarshaler, bytes []byte) (datapoints int, consumed int) {
+	metrics, err := unmarshaler.UnmarshalMetrics(bytes)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buf := make([]byte, 0, 256)
+	rms := metrics.ResourceMetrics()
+	for ri := 0; ri < rms.Len(); ri++ {
+		sms := rms.At(ri).ScopeMetrics()
+		for si := 0; si < sms.Len(); si++ {
+			ms := sms.At(si).Metrics()
+			for mi := 0; mi < ms.Len(); mi++ {
+				m := ms.At(mi)
+				var dps pmetric.NumberDataPointSlice
+				switch m.Type() {
+				case pmetric.MetricTypeGauge:
+					dps = m.Gauge().DataPoints()
+				case pmetric.MetricTypeSum:
+					dps = m.Sum().DataPoints()
+				default:
+					continue
+				}
+				for di := 0; di < dps.Len(); di++ {
+					dp := dps.At(di)
+					datapoints++
+					consumed += int(uint64(dp.Timestamp()) % 2)
+					buf = buf[:0]
+					for k, v := range dp.Attributes().All() {
+						buf = append(buf, k...)
+						buf = append(buf, v.AsString()...)
+					}
+					consumed += len(buf)
+				}
+			}
+		}
+	}
+	return datapoints, consumed
+}
+
+func BenchmarkMetrics_ScrapeDeepIteration_WireFormat(b *testing.B) {
+	data := createScrapeShapedMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	req := ExportMetricsServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		datapoints, _ := deepIterateWire(b, req)
+		if datapoints != 4800 {
+			b.Fatalf("expected 4800 datapoints, got %d", datapoints)
+		}
+	}
+}
+
+func BenchmarkMetrics_ScrapeDeepIteration_Unmarshal(b *testing.B) {
+	data := createScrapeShapedMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	unmarshaler := &pmetric.ProtoUnmarshaler{}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		datapoints, _ := deepIteratePdata(b, unmarshaler, bytes)
+		if datapoints != 4800 {
+			b.Fatalf("expected 4800 datapoints, got %d", datapoints)
+		}
+	}
+}
+
+// deepIterateWireSeq is deepIterateWire using the zero-allocation Seq
+// variants for the two per-element levels.
+func deepIterateWireSeq(b *testing.B, req ExportMetricsServiceRequest) (datapoints int, consumed int) {
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				for dp, err := range m.DataPointsSeq {
+					if err != nil {
+						b.Fatal(err)
+					}
+					datapoints++
+					ts, err := dp.Timestamp()
+					if err != nil {
+						b.Fatal(err)
+					}
+					consumed += int(ts % 2)
+					for kv, err := range dp.AttributesSeq {
+						if err != nil {
+							b.Fatal(err)
+						}
+						key, err := kv.Key()
+						if err != nil {
+							b.Fatal(err)
+						}
+						val, err := kv.ValueRaw()
+						if err != nil {
+							b.Fatal(err)
+						}
+						consumed += len(key) + len(val)
+					}
+				}
+			}
+			if err := metricErr(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := scopeErr(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := resErr(); err != nil {
+		b.Fatal(err)
+	}
+	return datapoints, consumed
+}
+
+func BenchmarkMetrics_ScrapeDeepIterationSeq_WireFormat(b *testing.B) {
+	data := createScrapeShapedMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	req := ExportMetricsServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		datapoints, _ := deepIterateWireSeq(b, req)
+		if datapoints != 4800 {
+			b.Fatalf("expected 4800 datapoints, got %d", datapoints)
+		}
+	}
+}
+
+// Continuity pair on the existing 5×100 fixture.
+
+func BenchmarkMetrics_DeepIteration_WireFormat(b *testing.B) {
+	data := createBenchMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	req := ExportMetricsServiceRequest(bytes)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		deepIterateWire(b, req)
+	}
+}
+
+func BenchmarkMetrics_DeepIteration_Unmarshal(b *testing.B) {
+	data := createBenchMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(data)
+	require.NoError(b, err)
+
+	unmarshaler := &pmetric.ProtoUnmarshaler{}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		deepIteratePdata(b, unmarshaler, bytes)
 	}
 }

@@ -102,6 +102,15 @@ See [example_test.go](example_test.go) for complete working examples.
 ```
 ExportMetricsServiceRequest (OTLP message bytes)
   └─ ResourceMetrics[] (one per resource)
+       └─ ScopeMetrics[] (one per instrumentation scope)
+            └─ Metric[] (individual metrics)
+                 ├─ Name()
+                 └─ DataPoint[] (one per data point, any metric type)
+                      ├─ Type()          (Gauge/Sum/Histogram/ExponentialHistogram/Summary)
+                      ├─ Timestamp()
+                      └─ KeyValue[] (attributes)
+                           ├─ Key()
+                           └─ ValueRaw()
 
 ExportLogsServiceRequest (OTLP message bytes)
   └─ ResourceLogs[] (one per resource)
@@ -166,6 +175,52 @@ func (s Span) SpanID() ([8]byte, error)
 func (s Span) ParentSpanID() ([8]byte, error)
 ```
 
+**Scope- and metric-level operations (metrics depth):**
+```go
+type ScopeMetrics []byte
+func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error)
+
+type Metric []byte
+func (m Metric) Name() ([]byte, error)
+func (m Metric) DataPoints() (iter.Seq[DataPoint], func() error)     // ergonomic, 2 allocs per open
+func (m Metric) DataPointsSeq(yield func(DataPoint, error) bool)     // zero-alloc, range directly
+
+type DataPoint struct{ /* unexported */ }
+func (d DataPoint) Raw() []byte
+func (d DataPoint) Type() MetricType
+func (d DataPoint) Timestamp() (uint64, error)
+func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error)   // ergonomic, 2 allocs per open
+func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool)   // zero-alloc, range directly
+
+type KeyValue []byte
+func (kv KeyValue) Key() ([]byte, error)
+func (kv KeyValue) ValueRaw() ([]byte, error)
+
+type MetricType int
+const (
+	MetricTypeGauge                MetricType = 5
+	MetricTypeSum                  MetricType = 7
+	MetricTypeHistogram            MetricType = 9
+	MetricTypeExponentialHistogram MetricType = 10
+	MetricTypeSummary              MetricType = 11
+)
+```
+
+`DataPoint` carries its `MetricType` because the attribute field number differs
+per data point wire type (histograms and exponential histograms encode
+attributes on a different field than gauges, sums, and summaries) — `Attributes()`
+and `AttributesSeq()` use `Type()` internally to pick the right field.
+
+Every level in this chain has both a closure-based iterator
+(`Metrics()`, `DataPoints()`, `Attributes()` — return `(iter.Seq[T], func() error)`,
+2 allocations per call to open) and, at the two hottest, deepest levels
+(`Metric.DataPointsSeq`, `DataPoint.AttributesSeq`), a zero-allocation `iter.Seq2`-style
+variant you range over directly, e.g. `for dp, err := range m.DataPointsSeq { ... }`.
+Prefer the closure-based API for ordinary code — it reads naturally and the error
+check is explicit. Reach for the `Seq` variants on a per-element hot path, such as
+hashing every data point's attributes across thousands of metrics per scrape,
+where the allocations from opening a closure-based iterator per metric add up.
+
 ## Design Philosophy
 
 This library provides:
@@ -207,6 +262,32 @@ Benchmarks on Apple M4 (5 resources, 100 signals per resource):
 | Logs | 51 ns, 2 allocs | 178 μs, 8,692 allocs | 3,490x |
 
 **Note:** The 2 allocations (24 bytes) in iteration are from the iterator error handling pattern (closure capture mechanism).
+
+### Deep Iteration Performance (metrics depth)
+
+Walking `ResourceMetrics.ScopeMetrics()` → `ScopeMetrics.Metrics()` → `Metric.DataPoints()` →
+`DataPoint.Attributes()` all the way down to individual attribute key/value bytes, compared
+against a full pdata unmarshal doing the equivalent walk (median of 5 runs, Apple M4):
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `BenchmarkMetrics_ScrapeDeepIteration_WireFormat` | 827,544 | 460,987 | 19,207 |
+| `BenchmarkMetrics_ScrapeDeepIterationSeq_WireFormat` | 634,474 | 184 | 7 |
+| `BenchmarkMetrics_ScrapeDeepIteration_Unmarshal` | 2,268,745 | 3,507,250 | 105,631 |
+| `BenchmarkMetrics_DeepIteration_WireFormat` | 42,548 | 20,912 | 1,033 |
+| `BenchmarkMetrics_DeepIteration_Unmarshal` | 87,263 | 159,361 | 5,161 |
+
+Speedup (wire format vs. unmarshal, by ns/op):
+
+| Fixture | Speedup |
+|---|---|
+| Scrape-shaped, closure-based (4,800 metrics × 1 dp × 4 attrs) | 2.74x |
+| Scrape-shaped, Seq variants (4,800 metrics × 1 dp × 4 attrs) | 3.58x |
+| Continuity (5 × 1 × 1 × 100 dp) | 2.05x |
+
+The Seq variants cut allocations from thousands per batch to 7 — this is the API to
+reach for when hashing or otherwise touching every data point's attributes across a
+large scrape.
 
 For detailed benchmarks and methodology, see [BENCHMARKS.md](docs/BENCHMARKS.md).
 

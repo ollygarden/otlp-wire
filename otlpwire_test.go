@@ -2,6 +2,7 @@ package otlpwire
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1385,4 +1386,526 @@ func BenchmarkLogsData_SplitByResource(b *testing.B) {
 		}
 		_ = getErr()
 	}
+}
+
+// buildScopedMetrics builds a request with the given number of scopes per
+// resource and metrics per scope, all gauges with one datapoint.
+func buildScopedMetrics(t *testing.T, resources, scopes, metricsPerScope int) []byte {
+	t.Helper()
+	metrics := pmetric.NewMetrics()
+	for r := 0; r < resources; r++ {
+		rm := metrics.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("service.name", fmt.Sprintf("service-%d", r))
+		for s := 0; s < scopes; s++ {
+			sm := rm.ScopeMetrics().AppendEmpty()
+			sm.Scope().SetName(fmt.Sprintf("scope-%d", s))
+			for m := 0; m < metricsPerScope; m++ {
+				metric := sm.Metrics().AppendEmpty()
+				metric.SetName(fmt.Sprintf("metric.%d.%d", s, m))
+				dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+				dp.SetIntValue(int64(m))
+				dp.SetTimestamp(1000000000)
+			}
+		}
+	}
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+	return bytes
+}
+
+func TestScopeMetricsIteration(t *testing.T) {
+	bytes := buildScopedMetrics(t, 2, 3, 4)
+	req := ExportMetricsServiceRequest(bytes)
+
+	totalScopes := 0
+	totalMetrics := 0
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			totalScopes++
+			metricSeq, metricErr := sm.Metrics()
+			for range metricSeq {
+				totalMetrics++
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+
+	require.Equal(t, 6, totalScopes)   // 2 resources × 3 scopes
+	require.Equal(t, 24, totalMetrics) // 6 scopes × 4 metrics
+}
+
+func TestScopeMetricsIteration_Malformed(t *testing.T) {
+	// Field 2 (scope_metrics) with wrong wire type: varint instead of bytes.
+	bad := ResourceMetrics{0x10, 0x01}
+	seq, errFn := bad.ScopeMetrics()
+	for range seq {
+	}
+	require.Error(t, errFn())
+}
+
+func TestMetricName(t *testing.T) {
+	bytes := buildScopedMetrics(t, 1, 1, 2)
+	req := ExportMetricsServiceRequest(bytes)
+
+	var names []string
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				name, err := m.Name()
+				require.NoError(t, err)
+				names = append(names, string(name))
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+
+	require.Equal(t, []string{"metric.0.0", "metric.0.1"}, names)
+}
+
+func TestMetricName_Absent(t *testing.T) {
+	// A metric message with only a unit (field 3), no name.
+	var m Metric
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendBytes(m, []byte("1"))
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Nil(t, name)
+}
+
+// buildAllTypesMetrics builds one metric of each of the five types, each
+// with two datapoints carrying attributes {"method":"GET","status":"200"}
+// and timestamp 1000000000.
+func buildAllTypesMetrics(t *testing.T) []byte {
+	t.Helper()
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+
+	setNumberDP := func(dp pmetric.NumberDataPoint) {
+		dp.SetIntValue(42)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	gauge := sm.Metrics().AppendEmpty()
+	gauge.SetName("test.gauge")
+	setNumberDP(gauge.SetEmptyGauge().DataPoints().AppendEmpty())
+	setNumberDP(gauge.Gauge().DataPoints().AppendEmpty())
+
+	sum := sm.Metrics().AppendEmpty()
+	sum.SetName("test.sum")
+	setNumberDP(sum.SetEmptySum().DataPoints().AppendEmpty())
+	setNumberDP(sum.Sum().DataPoints().AppendEmpty())
+
+	hist := sm.Metrics().AppendEmpty()
+	hist.SetName("test.histogram")
+	histBody := hist.SetEmptyHistogram()
+	for i := 0; i < 2; i++ {
+		dp := histBody.DataPoints().AppendEmpty()
+		dp.SetCount(10)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	expHist := sm.Metrics().AppendEmpty()
+	expHist.SetName("test.exphistogram")
+	expHistBody := expHist.SetEmptyExponentialHistogram()
+	for i := 0; i < 2; i++ {
+		dp := expHistBody.DataPoints().AppendEmpty()
+		dp.SetCount(10)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	summary := sm.Metrics().AppendEmpty()
+	summary.SetName("test.summary")
+	summaryBody := summary.SetEmptySummary()
+	for i := 0; i < 2; i++ {
+		dp := summaryBody.DataPoints().AppendEmpty()
+		dp.SetCount(10)
+		dp.SetTimestamp(1000000000)
+		dp.Attributes().PutStr("method", "GET")
+		dp.Attributes().PutStr("status", "200")
+	}
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+	return bytes
+}
+
+// forEachTestDataPoint iterates all datapoints in a marshaled request,
+// failing the test on any iterator error.
+func forEachTestDataPoint(t *testing.T, bytes []byte, fn func(metricName string, dp DataPoint)) {
+	t.Helper()
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				name, err := m.Name()
+				require.NoError(t, err)
+				dpSeq, dpErr := m.DataPoints()
+				for dp := range dpSeq {
+					fn(string(name), dp)
+				}
+				require.NoError(t, dpErr())
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+}
+
+func TestDataPointsIteration_AllTypes(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+
+	typeByMetric := map[string]MetricType{}
+	countByMetric := map[string]int{}
+	forEachTestDataPoint(t, bytes, func(name string, dp DataPoint) {
+		typeByMetric[name] = dp.Type()
+		countByMetric[name]++
+		require.NotEmpty(t, dp.Raw())
+	})
+
+	require.Equal(t, map[string]MetricType{
+		"test.gauge":        MetricTypeGauge,
+		"test.sum":          MetricTypeSum,
+		"test.histogram":    MetricTypeHistogram,
+		"test.exphistogram": MetricTypeExponentialHistogram,
+		"test.summary":      MetricTypeSummary,
+	}, typeByMetric)
+	for name, count := range countByMetric {
+		require.Equal(t, 2, count, "metric %s", name)
+	}
+}
+
+func TestDataPointsIteration_EmptyMetric(t *testing.T) {
+	// Metric with a name but no oneof body.
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendBytes(m, []byte("empty"))
+	seq, errFn := m.DataPoints()
+	count := 0
+	for range seq {
+		count++
+	}
+	require.NoError(t, errFn())
+	require.Equal(t, 0, count)
+}
+
+func TestDataPointsIteration_EarlyStop(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+
+	// Break after the first datapoint of a metric that has two; the error
+	// func must stay nil and iteration must stop cleanly.
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				seen := 0
+				dpSeq, dpErr := m.DataPoints()
+				for range dpSeq {
+					seen++
+					break
+				}
+				require.NoError(t, dpErr())
+				require.Equal(t, 1, seen)
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+}
+
+func TestDataPointsIteration_CorruptBody(t *testing.T) {
+	// Metric with a gauge body (field 5) whose datapoints field (field 1)
+	// declares a length longer than the remaining bytes.
+	var body []byte
+	body = protowire.AppendTag(body, 1, protowire.BytesType)
+	body = protowire.AppendVarint(body, 100) // claims 100 bytes, none follow
+
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.BytesType)
+	m = protowire.AppendBytes(m, body)
+
+	dpSeq, dpErr := m.DataPoints()
+	for range dpSeq {
+	}
+	require.Error(t, dpErr())
+}
+
+func TestDataPointsIteration_WrongWireTypeBody(t *testing.T) {
+	// Gauge oneof (field 5) encoded as varint instead of bytes.
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.VarintType)
+	m = protowire.AppendVarint(m, 1)
+
+	seq, errFn := m.DataPoints()
+	for range seq {
+	}
+	require.Error(t, errFn())
+}
+
+func TestDataPointsSeq_WrongWireTypeBody(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.VarintType)
+	m = protowire.AppendVarint(m, 1)
+
+	sawErr := false
+	for _, err := range m.DataPointsSeq {
+		if err != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr)
+}
+
+func TestDataPointTimestamp_WrongWireType(t *testing.T) {
+	var raw []byte
+	raw = protowire.AppendTag(raw, 3, protowire.BytesType)
+	raw = protowire.AppendBytes(raw, []byte("xx"))
+	dp := DataPoint{raw: raw, typ: MetricTypeGauge}
+	_, err := dp.Timestamp()
+	require.Error(t, err)
+}
+
+func TestDataPointTimestampAndAttributes_AllTypes(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+
+	// Expected AnyValue wire bytes for string values, built independently.
+	anyValueStr := func(s string) []byte {
+		var b []byte
+		b = protowire.AppendTag(b, 1, protowire.BytesType) // AnyValue.string_value = 1
+		b = protowire.AppendBytes(b, []byte(s))
+		return b
+	}
+	expected := map[string][]byte{
+		"method": anyValueStr("GET"),
+		"status": anyValueStr("200"),
+	}
+
+	checked := 0
+	forEachTestDataPoint(t, bytes, func(name string, dp DataPoint) {
+		ts, err := dp.Timestamp()
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000000000), ts)
+
+		attrs := map[string][]byte{}
+		attrSeq, attrErr := dp.Attributes()
+		for kv := range attrSeq {
+			key, err := kv.Key()
+			require.NoError(t, err)
+			val, err := kv.ValueRaw()
+			require.NoError(t, err)
+			attrs[string(key)] = val
+		}
+		require.NoError(t, attrErr())
+		require.Equal(t, expected, attrs, "metric %s", name)
+		checked++
+	})
+	require.Equal(t, 10, checked) // 5 types × 2 datapoints
+}
+
+func TestDataPointAttributes_Empty(t *testing.T) {
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("no.attrs")
+	dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+	dp.SetIntValue(1)
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+
+	forEachTestDataPoint(t, bytes, func(name string, dp DataPoint) {
+		ts, err := dp.Timestamp()
+		require.NoError(t, err)
+		require.Zero(t, ts)
+
+		count := 0
+		attrSeq, attrErr := dp.Attributes()
+		for range attrSeq {
+			count++
+		}
+		require.NoError(t, attrErr())
+		require.Zero(t, count)
+	})
+}
+
+func TestDataPointsSeq_AllTypes(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+	req := ExportMetricsServiceRequest(bytes)
+
+	// Expected AnyValue wire bytes for string values, built independently.
+	anyValueStr := func(s string) []byte {
+		var b []byte
+		b = protowire.AppendTag(b, 1, protowire.BytesType)
+		b = protowire.AppendBytes(b, []byte(s))
+		return b
+	}
+	expected := map[string][]byte{
+		"method": anyValueStr("GET"),
+		"status": anyValueStr("200"),
+	}
+
+	typeByMetric := map[string]MetricType{}
+	checked := 0
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				name, err := m.Name()
+				require.NoError(t, err)
+				for dp, err := range m.DataPointsSeq {
+					require.NoError(t, err)
+					typeByMetric[string(name)] = dp.Type()
+
+					ts, err := dp.Timestamp()
+					require.NoError(t, err)
+					require.Equal(t, uint64(1000000000), ts)
+
+					attrs := map[string][]byte{}
+					for kv, err := range dp.AttributesSeq {
+						require.NoError(t, err)
+						key, err := kv.Key()
+						require.NoError(t, err)
+						val, err := kv.ValueRaw()
+						require.NoError(t, err)
+						attrs[string(key)] = val
+					}
+					require.Equal(t, expected, attrs, "metric %s", name)
+					checked++
+				}
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+
+	require.Equal(t, 10, checked) // 5 types × 2 datapoints
+	require.Equal(t, map[string]MetricType{
+		"test.gauge":        MetricTypeGauge,
+		"test.sum":          MetricTypeSum,
+		"test.histogram":    MetricTypeHistogram,
+		"test.exphistogram": MetricTypeExponentialHistogram,
+		"test.summary":      MetricTypeSummary,
+	}, typeByMetric)
+}
+
+func TestDataPointsSeq_EarlyStop(t *testing.T) {
+	bytes := buildAllTypesMetrics(t)
+	forEachTestDataPoint(t, bytes, func(_ string, _ DataPoint) {})
+
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for sm := range scopeSeq {
+			metricSeq, metricErr := sm.Metrics()
+			for m := range metricSeq {
+				seen := 0
+				for _, err := range m.DataPointsSeq {
+					require.NoError(t, err)
+					seen++
+					break
+				}
+				require.Equal(t, 1, seen) // every metric has 2 datapoints
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+}
+
+func TestDataPointsSeq_CorruptBody(t *testing.T) {
+	// Gauge body (field 5) whose datapoints field (field 1) declares a
+	// length longer than the remaining bytes.
+	var body []byte
+	body = protowire.AppendTag(body, 1, protowire.BytesType)
+	body = protowire.AppendVarint(body, 100)
+
+	var m Metric
+	m = protowire.AppendTag(m, 5, protowire.BytesType)
+	m = protowire.AppendBytes(m, body)
+
+	sawErr := false
+	for _, err := range m.DataPointsSeq {
+		if err != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr)
+}
+
+func TestDataPointsSeq_ZeroAlloc(t *testing.T) {
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("alloc.test")
+	dp := metric.SetEmptyGauge().DataPoints().AppendEmpty()
+	dp.SetIntValue(1)
+	dp.SetTimestamp(1000000000)
+	dp.Attributes().PutStr("method", "GET")
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	bytes, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(t, err)
+
+	var metricBytes Metric
+	req := ExportMetricsServiceRequest(bytes)
+	resources, resErr := req.ResourceMetrics()
+	for rm := range resources {
+		scopeSeq, scopeErr := rm.ScopeMetrics()
+		for s := range scopeSeq {
+			metricSeq, metricErr := s.Metrics()
+			for m := range metricSeq {
+				metricBytes = m
+			}
+			require.NoError(t, metricErr())
+		}
+		require.NoError(t, scopeErr())
+	}
+	require.NoError(t, resErr())
+	require.NotEmpty(t, metricBytes)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		for dp, err := range metricBytes.DataPointsSeq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			for kv, err := range dp.AttributesSeq {
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = kv.Key()
+				_, _ = kv.ValueRaw()
+			}
+		}
+	})
+	require.Zero(t, allocs, "DataPointsSeq/AttributesSeq must not allocate")
 }

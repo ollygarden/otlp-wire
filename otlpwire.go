@@ -33,6 +33,115 @@ type ScopeSpans []byte
 // Span represents a single Span message (raw wire bytes).
 type Span []byte
 
+// ScopeMetrics represents a single ScopeMetrics message (raw wire bytes).
+type ScopeMetrics []byte
+
+// Metric represents a single Metric message (raw wire bytes).
+type Metric []byte
+
+// MetricType identifies which oneof body a DataPoint came from.
+type MetricType int
+
+// Metric oneof body field numbers in the Metric protobuf message.
+const (
+	MetricTypeGauge                MetricType = 5
+	MetricTypeSum                  MetricType = 7
+	MetricTypeHistogram            MetricType = 9
+	MetricTypeExponentialHistogram MetricType = 10
+	MetricTypeSummary              MetricType = 11
+)
+
+// DataPoint represents a single datapoint message (raw wire bytes) together
+// with the metric type it came from. The type is needed because the
+// attributes field number differs between datapoint message types.
+type DataPoint struct {
+	raw []byte
+	typ MetricType
+}
+
+// Raw returns the raw datapoint message bytes.
+func (d DataPoint) Raw() []byte { return d.raw }
+
+// Type returns the metric type this datapoint came from.
+func (d DataPoint) Type() MetricType { return d.typ }
+
+// KeyValue represents a single KeyValue message (raw wire bytes).
+type KeyValue []byte
+
+// Key returns the attribute key (field 1) as a view into the underlying
+// buffer. Returns nil if the field is not present.
+func (kv KeyValue) Key() ([]byte, error) {
+	return extractBytesField([]byte(kv), 1)
+}
+
+// ValueRaw returns the raw AnyValue message bytes (field 2) as a view into
+// the underlying buffer, suitable for type-tagged hashing.
+// Returns nil if the field is not present.
+func (kv KeyValue) ValueRaw() ([]byte, error) {
+	return extractBytesField([]byte(kv), 2)
+}
+
+// attributesFieldNum returns the field number of the repeated KeyValue
+// attributes for each datapoint message type.
+func (d DataPoint) attributesFieldNum() protowire.Number {
+	switch d.typ {
+	case MetricTypeHistogram:
+		return 9
+	case MetricTypeExponentialHistogram:
+		return 1
+	default: // NumberDataPoint (gauge, sum) and SummaryDataPoint
+		return 7
+	}
+}
+
+// Timestamp returns the datapoint's time_unix_nano (field 3, fixed64).
+// Returns 0 if the field is not present.
+func (d DataPoint) Timestamp() (uint64, error) {
+	return extractFixed64Field(d.raw, 3)
+}
+
+// Attributes returns an iterator over the datapoint's attribute KeyValues.
+// The returned function should be called after iteration to check for errors.
+func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error) {
+	var iterErr error
+	fieldNum := d.attributesFieldNum()
+
+	seq := func(yield func(KeyValue) bool) {
+		forEachRepeatedField(d.raw, fieldNum, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(KeyValue(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
+// AttributesSeq is a zero-allocation alternative to Attributes. It has the
+// shape of an iter.Seq2[KeyValue, error] and is meant to be ranged over
+// directly:
+//
+//	for kv, err := range dp.AttributesSeq {
+//		if err != nil { ... }
+//	}
+//
+// On a parse error it yields a nil KeyValue with a non-nil error and stops.
+func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool) {
+	forEachRepeatedField(d.raw, d.attributesFieldNum(), func(rb []byte, err error) bool {
+		if err != nil {
+			yield(nil, err)
+			return false
+		}
+		return yield(KeyValue(rb), nil)
+	})
+}
+
 // DataPointCount returns the total number of metric data points in the batch.
 func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
 	return countMetricDataPoints([]byte(m))
@@ -74,6 +183,152 @@ func (r ResourceMetrics) Resource() ([]byte, error) {
 // Implements io.WriterTo interface.
 func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error) {
 	return writeResourceMessage(w, []byte(r))
+}
+
+// ScopeMetrics returns an iterator over ScopeMetrics in this ResourceMetrics.
+// Field 2 in the ResourceMetrics protobuf message.
+// The returned function should be called after iteration to check for errors.
+func (r ResourceMetrics) ScopeMetrics() (iter.Seq[ScopeMetrics], func() error) {
+	var iterErr error
+
+	seq := func(yield func(ScopeMetrics) bool) {
+		forEachRepeatedField([]byte(r), 2, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(ScopeMetrics(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
+// Metrics returns an iterator over Metrics in this ScopeMetrics.
+// Field 2 in the ScopeMetrics protobuf message.
+// The returned function should be called after iteration to check for errors.
+func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error) {
+	var iterErr error
+
+	seq := func(yield func(Metric) bool) {
+		forEachRepeatedField([]byte(s), 2, func(rb []byte, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(Metric(rb))
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
+// Name returns the metric name (field 1) as a view into the underlying
+// buffer. Returns nil if the field is not present.
+func (m Metric) Name() ([]byte, error) {
+	return extractBytesField([]byte(m), 1)
+}
+
+// DataPoints returns an iterator over datapoints in this Metric, descending
+// whichever oneof body is present (gauge 5, sum 7, histogram 9,
+// exponential_histogram 10, summary 11). Each body holds its datapoints in
+// field 1. If a malformed metric carries more than one oneof body,
+// datapoints from each are yielded, each tagged with its own type.
+// The returned function should be called after iteration to check for errors.
+// DataPoints is a thin adapter over DataPointsSeq.
+func (m Metric) DataPoints() (iter.Seq[DataPoint], func() error) {
+	var iterErr error
+
+	seq := func(yield func(DataPoint) bool) {
+		m.DataPointsSeq(func(dp DataPoint, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(dp)
+		})
+	}
+
+	errFunc := func() error {
+		return iterErr
+	}
+
+	return seq, errFunc
+}
+
+// DataPointsSeq is a zero-allocation alternative to DataPoints. It has the
+// shape of an iter.Seq2[DataPoint, error] and is meant to be ranged over
+// directly:
+//
+//	for dp, err := range m.DataPointsSeq {
+//		if err != nil { ... }
+//	}
+//
+// On a parse error it yields a zero DataPoint with a non-nil error and
+// stops. Unlike DataPoints, no closures escape, so iterating allocates
+// nothing. If a malformed metric carries more than one oneof body,
+// datapoints from each are yielded, each tagged with its own type.
+func (m Metric) DataPointsSeq(yield func(DataPoint, error) bool) {
+	data := []byte(m)
+	pos := 0
+
+	for pos < len(data) {
+		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			yield(DataPoint{}, errors.New("malformed protobuf tag in metric"))
+			return
+		}
+		pos += tagLen
+
+		typ := MetricType(fieldNum)
+		isBody := typ == MetricTypeGauge || typ == MetricTypeSum ||
+			typ == MetricTypeHistogram || typ == MetricTypeExponentialHistogram ||
+			typ == MetricTypeSummary
+		if isBody && wireType != protowire.BytesType {
+			yield(DataPoint{}, errors.New("wrong wire type for metric data"))
+			return
+		}
+		if isBody {
+			body, n := protowire.ConsumeBytes(data[pos:])
+			if n < 0 {
+				yield(DataPoint{}, errors.New("invalid bytes in metric data"))
+				return
+			}
+			pos += n
+
+			done := false
+			forEachRepeatedField(body, 1, func(dpBytes []byte, err error) bool {
+				if err != nil {
+					done = true
+					yield(DataPoint{}, err)
+					return false
+				}
+				if !yield(DataPoint{raw: dpBytes, typ: typ}, nil) {
+					done = true
+					return false
+				}
+				return true
+			})
+			if done {
+				return
+			}
+		} else {
+			n := skipField(data[pos:], wireType)
+			if n < 0 {
+				yield(DataPoint{}, errors.New("failed to skip field"))
+				return
+			}
+			pos += n
+		}
+	}
 }
 
 // LogRecordCount returns the total number of log records in the batch.
@@ -542,6 +797,73 @@ func extractResourceMessage(data []byte) ([]byte, error) {
 	}
 
 	return nil, errors.New("resource field not found")
+}
+
+// extractBytesField extracts the first occurrence of a length-delimited
+// field from protobuf data. Returns nil (not an error) if absent.
+// The returned slice aliases data; no copy is made.
+func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
+	pos := 0
+
+	for pos < len(data) {
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			return nil, errors.New("malformed protobuf tag")
+		}
+		pos += tagLen
+
+		if num == fieldNum {
+			if wireType != protowire.BytesType {
+				return nil, errors.New("wrong wire type for field")
+			}
+			msgBytes, n := protowire.ConsumeBytes(data[pos:])
+			if n < 0 {
+				return nil, errors.New("invalid bytes in field")
+			}
+			return msgBytes, nil
+		}
+
+		n := skipField(data[pos:], wireType)
+		if n < 0 {
+			return nil, errors.New("failed to skip field")
+		}
+		pos += n
+	}
+
+	return nil, nil
+}
+
+// extractFixed64Field extracts the first occurrence of a fixed64 field from
+// protobuf data. Returns 0 (not an error) if absent.
+func extractFixed64Field(data []byte, fieldNum protowire.Number) (uint64, error) {
+	pos := 0
+
+	for pos < len(data) {
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			return 0, errors.New("malformed protobuf tag")
+		}
+		pos += tagLen
+
+		if num == fieldNum {
+			if wireType != protowire.Fixed64Type {
+				return 0, errors.New("wrong wire type for field")
+			}
+			v, n := protowire.ConsumeFixed64(data[pos:])
+			if n < 0 {
+				return 0, errors.New("invalid fixed64 in field")
+			}
+			return v, nil
+		}
+
+		n := skipField(data[pos:], wireType)
+		if n < 0 {
+			return 0, errors.New("failed to skip field")
+		}
+		pos += n
+	}
+
+	return 0, nil
 }
 
 // writeResourceMessage writes resource data as a valid OTLP export request message.
