@@ -296,10 +296,12 @@ For detailed benchmarks and methodology, see [BENCHMARKS.md](docs/BENCHMARKS.md)
 - **[DESIGN.md](docs/DESIGN.md)** - Architecture, design decisions, and implementation details
 - **[BENCHMARKS.md](docs/BENCHMARKS.md)** - Performance comparison and methodology
 - **[example_test.go](example_test.go)** - Complete working examples (observability metrics, sharding, sampling)
+- **[AGENTS.md](AGENTS.md)** - Repository map, parser guardrails, and validation matrix
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution and pull-request expectations
 
 ## Requirements
 
-- Go 1.23+ (for `iter.Seq` iterator support)
+- Go 1.25+
 
 ## License
 
