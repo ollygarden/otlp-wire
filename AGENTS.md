@@ -16,6 +16,7 @@ git diff --exit-code -- go.mod go.sum
 go test -v -race ./...
 go vet ./...
 git diff --check
+test -z "${BASE_SHA:-}" || git diff --check "${BASE_SHA}...HEAD"
 ```
 
 Useful focused and performance commands:

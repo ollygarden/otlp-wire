@@ -16,6 +16,7 @@ Use Go 1.25 or newer. CI uses the latest stable Go release.
 go test -v -race ./...
 go vet ./...
 git diff --check
+test -z "${BASE_SHA:-}" || git diff --check "${BASE_SHA}...HEAD"
 ```
 
 The current `go.sum` retains checksum history from earlier dependency versions,
