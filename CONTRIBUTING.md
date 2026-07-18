@@ -64,9 +64,9 @@ Each pull request should:
   benchmark documentation when their contracts or claims change.
 
 CodeRabbit may review pull requests. Verify findings against the protobuf and
-iterator contracts before applying them and reply on each actionable thread. A
-human maintainer squash-merges; contributors and coding agents do not merge
-their own changes.
+iterator contracts before applying them and reply on each actionable thread.
+Maintainers squash-merge after required checks and review feedback are
+satisfied.
 
 By contributing, you agree that your contribution is provided under this
 repository's [Apache License 2.0](LICENSE). Do not include credentials, real
@@ -74,6 +74,8 @@ telemetry, production payloads, customer data, or other sensitive information
 in fixtures, benchmarks, logs, or review material.
 
 All contributors are responsible for understanding and validating their
-submissions, including agent-generated work. Review the complete diff and make
-sure malformed-input and performance-sensitive behavior are covered before
-requesting review.
+submissions, including agent-generated work. A human contributor must review
+and take ownership of agent-generated output, be able to respond to feedback,
+and disclose material agent involvement in the pull request. Review the
+complete diff and make sure malformed-input and performance-sensitive behavior
+are covered before requesting review.
