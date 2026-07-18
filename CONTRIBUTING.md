@@ -13,12 +13,16 @@ guardrails, testing patterns, and change-specific validation matrix.
 Use Go 1.25 or newer. CI uses the latest stable Go release.
 
 ```bash
-go mod tidy
-git diff --exit-code -- go.mod go.sum
 go test -v -race ./...
 go vet ./...
 git diff --check
 ```
+
+The current `go.sum` retains checksum history from earlier dependency versions,
+so `go mod tidy -diff` reports baseline drift. For dependency changes, run
+`go mod tidy` and review both `go.mod` and `go.sum` intentionally, but keep
+unrelated checksum cleanup out of a focused change unless reconciling that
+baseline is part of the task.
 
 Run focused tests and benchmarks as needed:
 
