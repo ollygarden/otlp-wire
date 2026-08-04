@@ -45,6 +45,8 @@ go.opentelemetry.io/collector/featuregate v1.58.0 h1:Kh6Dpgbxywv/Q3D6qPehaSxNCxv
 go.opentelemetry.io/collector/featuregate v1.58.0/go.mod h1:4ga1QBMPEejXXmpyJS8lmaRpknJ3Lb9Bvk6e420bUFU=
 go.opentelemetry.io/collector/featuregate v1.62.0 h1:pYY7RlulSCTOS9mFWxasMLwYJCfNXHtnOkZlv3jg/V4=
 go.opentelemetry.io/collector/featuregate v1.62.0/go.mod h1:4ga1QBMPEejXXmpyJS8lmaRpknJ3Lb9Bvk6e420bUFU=
+go.opentelemetry.io/collector/featuregate v1.63.0 h1:6EWX1C5AtmIh8hFH97DwK6R7R8Jk3fTLxAUfZPXGutY=
+go.opentelemetry.io/collector/featuregate v1.63.0/go.mod h1:4ga1QBMPEejXXmpyJS8lmaRpknJ3Lb9Bvk6e420bUFU=
 go.opentelemetry.io/collector/internal/testutil v0.150.0 h1:J4PLQGPfbLVaL5eI1aMc0m0TMixV9wzBhNhoHU00J0I=
 go.opentelemetry.io/collector/internal/testutil v0.150.0/go.mod h1:Jkjs6rkqs973LqgZ0Fe3zrokQRKULYXPIf4HuqStiEE=
 go.opentelemetry.io/collector/pdata v1.56.0 h1:W+QAfN2Iz8SNss1T5JNzRWFnw+7oP1vXBQH9ZuOJkXY=
@@ -53,6 +55,8 @@ go.opentelemetry.io/collector/pdata v1.58.0 h1:5Lxut3NxKp87066Pzt+3q7+JUuFI5B3te
 go.opentelemetry.io/collector/pdata v1.58.0/go.mod h1:4vZtODINbC/JF3eGocnatdImzbRHseOywIcr+aULjCg=
 go.opentelemetry.io/collector/pdata v1.62.0 h1:xGdwl2Cs5Rq5nKs0nYvAxm3Qq20HcySVAmUElATS8Es=
 go.opentelemetry.io/collector/pdata v1.62.0/go.mod h1:WFy5R6XGpz2Q4MaekeEm+qc4GY5V3+BhQIwGPkp+fj0=
+go.opentelemetry.io/collector/pdata v1.63.0 h1:fY2xSG2MnyoBwA4GUhzoogGZMuNS0qHpCoODqaKwiVQ=
+go.opentelemetry.io/collector/pdata v1.63.0/go.mod h1:jzozYYhQEkTQ/CCbCBNC+hYUeju9S2J8HIqIDHdxZWk=
 go.opentelemetry.io/otel v1.39.0 h1:8yPrr/S0ND9QEfTfdP9V+SiwT4E0G7Y5MO7p85nis48=
 go.opentelemetry.io/otel v1.39.0/go.mod h1:kLlFTywNWrFyEdH0oj2xK0bFYZtHRYUdv1NklR/tgc8=
 go.opentelemetry.io/otel/metric v1.39.0 h1:d1UzonvEZriVfpNKEVmHXbdf909uGTOQjA0HF0Ls5Q0=
