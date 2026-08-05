@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
 	"go.olly.garden/otlp-wire"
@@ -134,6 +135,61 @@ func ExampleMetric_DataPoints() {
 		}
 	}
 	// Output: request.duration ts=1000000000 attr=method
+}
+
+// ExampleResourceLogs_StringAttribute walks resource context and log records
+// without unmarshaling the OTLP request.
+func ExampleResourceLogs_StringAttribute() {
+	logs := plog.NewLogs()
+	resource := logs.ResourceLogs().AppendEmpty()
+	resource.Resource().Attributes().PutStr("service.name", "checkout")
+	scope := resource.ScopeLogs().AppendEmpty()
+	scope.LogRecords().AppendEmpty().SetSeverityNumber(plog.SeverityNumberWarn)
+
+	data, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	request := otlpwire.ExportLogsServiceRequest(data)
+	resources, resourceErr := request.ResourceLogs()
+	for resource := range resources {
+		service, found, err := resource.StringAttribute("service.name")
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		if !found {
+			fmt.Println("service.name missing")
+			return
+		}
+
+		scopes, scopeErr := resource.ScopeLogs()
+		for scope := range scopes {
+			for record, err := range scope.LogRecordsSeq {
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				severity, err := record.SeverityNumber()
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Printf("%s severity=%d\n", service, severity)
+			}
+		}
+		if err := scopeErr(); err != nil {
+			fmt.Println(err)
+			return
+		}
+	}
+	if err := resourceErr(); err != nil {
+		fmt.Println(err)
+	}
+
+	// Output: checkout severity=13
 }
 
 // Helper functions
