@@ -114,6 +114,9 @@ ExportMetricsServiceRequest (OTLP message bytes)
 
 ExportLogsServiceRequest (OTLP message bytes)
   └─ ResourceLogs[] (one per resource)
+       └─ ScopeLogs[] (one per instrumentation scope)
+            └─ LogRecord[]
+                 └─ SeverityNumber()
 
 ExportTracesServiceRequest (OTLP message bytes)
   └─ ResourceSpans[] (one per resource)
@@ -152,6 +155,8 @@ type ResourceLogs []byte
 func (r ResourceLogs) LogRecordCount() (int, error)
 func (r ResourceLogs) Resource() ([]byte, error)
 func (r ResourceLogs) WriteTo(w io.Writer) (int64, error)
+func (r ResourceLogs) ScopeLogs() (iter.Seq[ScopeLogs], func() error)
+func (r ResourceLogs) StringAttribute(key string) ([]byte, bool, error)
 
 type ResourceSpans []byte
 func (r ResourceSpans) SpanCount() (int, error)
@@ -195,6 +200,7 @@ func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool)   // zero-all
 type KeyValue []byte
 func (kv KeyValue) Key() ([]byte, error)
 func (kv KeyValue) ValueRaw() ([]byte, error)
+func (kv KeyValue) StringValue() ([]byte, bool, error)
 
 type MetricType int
 const (
@@ -205,6 +211,37 @@ const (
 	MetricTypeSummary              MetricType = 11
 )
 ```
+
+**Log-level operations and resource attributes:**
+```go
+type ScopeLogs []byte
+func (s ScopeLogs) LogRecords() (iter.Seq[LogRecord], func() error) // ergonomic, 2 allocs per open
+func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) // zero-alloc, range directly
+
+type LogRecord []byte
+func (r LogRecord) SeverityNumber() (int32, error)
+
+type Resource []byte
+func (r Resource) Attributes() (iter.Seq[KeyValue], func() error)
+func (r Resource) AttributesSeq(yield func(KeyValue, error) bool)
+func (r Resource) StringAttribute(key string) ([]byte, bool, error)
+```
+
+`Resource.StringAttribute` is zero-copy and returns a separate `found` value,
+so a missing resource attribute can be distinguished from a present empty
+string. It inspects one Resource message; convert the existing resource bytes
+without copying: `attrs := otlpwire.Resource(resourceBytes)`.
+
+`ResourceLogs.StringAttribute` is the preferred accessor when starting from a
+`ResourceLogs`: it merges every encoded singular Resource message in wire
+order, validates later Resource messages, and matches pdata by retaining the
+first value for duplicate attribute keys.
+
+`KeyValue.ValueRaw` remains a lightweight view of the first encoded AnyValue
+field for hashing-oriented hot paths. `KeyValue.StringValue` fully parses
+AnyValue and follows protobuf oneof behavior, so a later non-string oneof
+member makes `StringValue` report `found=false` even if an earlier encoded
+member was a string.
 
 `DataPoint` carries its `MetricType` because the attribute field number differs
 per data point wire type (histograms and exponential histograms encode

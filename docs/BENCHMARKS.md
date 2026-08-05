@@ -280,3 +280,31 @@ unmarshal improves from 2.74x to 3.58x. Use the closure-based pattern for outer,
 amortized levels and general iteration; use the Seq variants specifically for
 `DataPoints()`/`Attributes()` in code paths that iterate every metric or every data
 point in a batch, such as scrape-shaped or high-cardinality workloads.
+
+---
+
+## Log severity classification (E-2892)
+
+This benchmark models an insight consumer that reads resource context through
+`ResourceLogs.StringAttribute`, walks every LogRecord, and classifies severity
+without needing log bodies or record attributes. `createSeverityClassificationBenchLogs`
+contains 5 resources and 600 records, covers unspecified/trace/debug/info/warn/error
+severities, and includes present, empty, non-string, and absent `service.name`
+and `deployment.environment` values. Each benchmark first computes the complete
+classification through both wire and pdata paths outside the timed section and
+fails if the results differ.
+
+**Environment-specific result:** Apple M4, darwin/arm64, Go 1.26.3;
+`go test -run '^$' -bench 'BenchmarkLogs_SeverityClassification' -benchmem ./...`.
+Measurements vary by machine and toolchain; do not treat these values as a
+portable performance guarantee.
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| `BenchmarkLogs_SeverityClassification_WireFormat` | 49,044 | 488 | 15 |
+| `BenchmarkLogs_SeverityClassification_Unmarshal` | 117,241 | 257,906 | 6,690 |
+
+The wire path is approximately 2.4x faster in this environment and avoids the
+full pdata object graph. Its 15 allocations are the established outer iterator
+error-closure cost; `ScopeLogs.LogRecordsSeq` itself remains zero-allocation on
+the per-record path.

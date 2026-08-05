@@ -17,14 +17,16 @@ Current approaches require full unmarshaling, which is expensive:
 
 1. **Fast signal counting** without unmarshaling
 2. **Resource-level batch splitting** for sharding/parallel processing
-3. **Metadata extraction** (Resource bytes) for routing decisions
+3. **Metadata extraction** (Resource bytes and selected string attributes) for routing decisions
 4. **Minimal API** - provide tools, not opinions
 5. **Zero-copy where possible** - work on raw bytes
 
 ## Non-Goals
 
 1. **Not a complete OTLP parser** - use official libraries for full deserialization
-2. **Not attribute-aware** - we don't read/filter by attribute values
+2. **Not a general attribute query engine** - selected resource strings can be
+   read for routing, but arbitrary attribute transformations remain the job of
+   the official pdata APIs
 3. **Not scope/metric-level splitting** - only resource-level granularity is provided
 4. **Not a query language** - no path expressions or complex filters
 
@@ -68,6 +70,11 @@ type ExportTracesServiceRequest []byte
 type ResourceMetrics []byte
 type ResourceLogs []byte
 type ResourceSpans []byte
+
+// Depth and attribute-aware wire views
+type Resource []byte
+type ScopeLogs []byte
+type LogRecord []byte
 ```
 
 **ExportMetricsServiceRequest methods:**
@@ -99,6 +106,48 @@ func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error)
 - `ExportTracesServiceRequest.ResourceSpans() (iter.Seq[ResourceSpans], func() error)`
 - `ResourceLogs.LogRecordCount() (int, error)`
 - `ResourceSpans.SpanCount() (int, error)`
+- `ResourceLogs.ScopeLogs() (iter.Seq[ScopeLogs], func() error)`
+- `ScopeLogs.LogRecords() (iter.Seq[LogRecord], func() error)`
+- `ScopeLogs.LogRecordsSeq(func(LogRecord, error) bool)`
+- `LogRecord.SeverityNumber() (int32, error)`
+
+## Log Depth and Resource Attribute Access
+
+Logs expose the same raw-byte progression used by traces and metrics:
+
+```text
+ExportLogsServiceRequest
+  └─ ResourceLogs
+       └─ ScopeLogs
+            └─ LogRecord
+```
+
+`ScopeLogs.LogRecords` follows the package-wide `(iter.Seq[T], func() error)`
+contract. `LogRecordsSeq` is the per-record, zero-allocation variant: it emits
+`(LogRecord, error)` directly and stops after a parse error. `SeverityNumber`
+reads field 2 as an `int32`, scans the whole LogRecord, and uses protobuf's
+last-scalar-value behavior while still surfacing trailing malformed data.
+
+`Resource` is an explicit zero-copy wrapper around the bytes returned from the
+existing `Resource()` methods. `Attributes`/`AttributesSeq` expose raw
+KeyValues, while `Resource.StringAttribute(key)` is the intentionally narrow
+semantic accessor for one Resource message. `ResourceLogs.StringAttribute(key)`
+is the preferred generic accessor for a ResourceLogs message: it merges every
+encoded singular Resource field in wire order, preserves pdata's first
+duplicate-attribute behavior, and validates later Resource messages. Both
+return `(value, found, error)` so missing and empty strings remain distinct.
+
+The older `KeyValue.Key` and `ValueRaw` remain lightweight first-encoded-field
+views for existing metric hashing paths. `KeyValue.StringValue` and
+`Resource.StringAttribute` are separate complete parsers: they validate
+KeyValue/AnyValue wire structure, apply AnyValue oneof ordering, and continue
+through later fields so corruption is not hidden by an early match. Semantic
+nested values use a conservative 64-message depth budget and fail with a
+stable limit error before unbounded stack growth. Resource entity references
+are also structurally checked. `LogRecord.SeverityNumber` validates all known
+pdata LogRecord field wire types, including nested body and attributes, while
+using final-value-wins severity semantics. Unknown protobuf groups are skipped
+with matching end-group validation, preserving forward compatibility.
 
 ## Use Cases
 
@@ -504,4 +553,3 @@ API is designed to be additive:
 2. **DESIGN.md** - This document (architecture, decisions)
 3. **example_test.go** - Runnable examples for godoc
 4. **Inline docs** - Method documentation with use cases
-

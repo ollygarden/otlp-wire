@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -277,6 +278,153 @@ func BenchmarkLogs_Split_UnmarshalRemarshal(b *testing.B) {
 	}
 }
 
+// benchmarkLogSeveritySink prevents severity classification and service-context
+// reads from being optimized away in the paired benchmarks below.
+var benchmarkLogSeveritySink int
+
+// BenchmarkLogs_SeverityClassification_WireFormat measures the complete
+// resource-context, record-iteration, and severity-classification path used by
+// log insight consumers without unmarshaling the OTLP payload.
+func BenchmarkLogs_SeverityClassification_WireFormat(b *testing.B) {
+	data := createSeverityClassificationBenchLogs()
+	bytes, err := (&plog.ProtoMarshaler{}).MarshalLogs(data)
+	require.NoError(b, err)
+	request := ExportLogsServiceRequest(bytes)
+	wireResult, err := classifyWireLogSeverities(request)
+	require.NoError(b, err)
+	pdataResult, err := classifyPdataLogSeverities(bytes, &plog.ProtoUnmarshaler{})
+	require.NoError(b, err)
+	require.Equal(b, pdataResult, wireResult, "wire and pdata paths must classify the same fixture identically")
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		result, err := classifyWireLogSeverities(request)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkLogSeveritySink = result.score()
+	}
+}
+
+// BenchmarkLogs_SeverityClassification_Unmarshal measures the same work as
+// BenchmarkLogs_SeverityClassification_WireFormat after full pdata unmarshal.
+func BenchmarkLogs_SeverityClassification_Unmarshal(b *testing.B) {
+	data := createSeverityClassificationBenchLogs()
+	bytes, err := (&plog.ProtoMarshaler{}).MarshalLogs(data)
+	require.NoError(b, err)
+	unmarshaler := &plog.ProtoUnmarshaler{}
+	wireResult, err := classifyWireLogSeverities(ExportLogsServiceRequest(bytes))
+	require.NoError(b, err)
+	pdataResult, err := classifyPdataLogSeverities(bytes, unmarshaler)
+	require.NoError(b, err)
+	require.Equal(b, wireResult, pdataResult, "wire and pdata paths must classify the same fixture identically")
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		result, err := classifyPdataLogSeverities(bytes, unmarshaler)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkLogSeveritySink = result.score()
+	}
+}
+
+type logSeverityClassification struct {
+	counts          [6]int
+	contextStrings  int
+	contextByteSize int
+}
+
+func (result logSeverityClassification) score() int {
+	score := result.contextStrings + result.contextByteSize
+	for class, count := range result.counts {
+		score += class * count
+	}
+	return score
+}
+
+func classifyWireLogSeverities(request ExportLogsServiceRequest) (logSeverityClassification, error) {
+	var result logSeverityClassification
+	resources, resourceErr := request.ResourceLogs()
+	for resource := range resources {
+		for _, key := range []string{"service.name", "deployment.environment"} {
+			value, found, err := resource.StringAttribute(key)
+			if err != nil {
+				return logSeverityClassification{}, err
+			}
+			if found {
+				result.contextStrings++
+				result.contextByteSize += len(value)
+			}
+		}
+
+		scopes, scopeErr := resource.ScopeLogs()
+		for scope := range scopes {
+			for record, err := range scope.LogRecordsSeq {
+				if err != nil {
+					return logSeverityClassification{}, err
+				}
+				severity, err := record.SeverityNumber()
+				if err != nil {
+					return logSeverityClassification{}, err
+				}
+				result.counts[logSeverityClass(severity)]++
+			}
+		}
+		if err := scopeErr(); err != nil {
+			return logSeverityClassification{}, err
+		}
+	}
+	if err := resourceErr(); err != nil {
+		return logSeverityClassification{}, err
+	}
+	return result, nil
+}
+
+func classifyPdataLogSeverities(data []byte, unmarshaler *plog.ProtoUnmarshaler) (logSeverityClassification, error) {
+	logs, err := unmarshaler.UnmarshalLogs(data)
+	if err != nil {
+		return logSeverityClassification{}, err
+	}
+	var result logSeverityClassification
+	for resourceIndex := 0; resourceIndex < logs.ResourceLogs().Len(); resourceIndex++ {
+		resource := logs.ResourceLogs().At(resourceIndex)
+		for _, key := range []string{"service.name", "deployment.environment"} {
+			if value, ok := resource.Resource().Attributes().Get(key); ok && value.Type() == pcommon.ValueTypeStr {
+				result.contextStrings++
+				result.contextByteSize += len(value.Str())
+			}
+		}
+		for scopeIndex := 0; scopeIndex < resource.ScopeLogs().Len(); scopeIndex++ {
+			scope := resource.ScopeLogs().At(scopeIndex)
+			for recordIndex := 0; recordIndex < scope.LogRecords().Len(); recordIndex++ {
+				record := scope.LogRecords().At(recordIndex)
+				result.counts[logSeverityClass(int32(record.SeverityNumber()))]++
+			}
+		}
+	}
+	return result, nil
+}
+
+func logSeverityClass(severity int32) int {
+	switch {
+	case severity < 1:
+		return 0
+	case severity <= 4:
+		return 1
+	case severity <= 8:
+		return 2
+	case severity <= 12:
+		return 3
+	case severity <= 16:
+		return 4
+	default:
+		return 5
+	}
+}
+
 // ========== Helper Functions ==========
 
 func createBenchMetrics() pmetric.Metrics {
@@ -353,6 +501,54 @@ func createBenchLogs() plog.Logs {
 			lr.SetSeverityText("INFO")
 			lr.Attributes().PutStr("log.level", "info")
 			lr.Attributes().PutStr("logger.name", "test.logger")
+		}
+	}
+	return logs
+}
+
+// createSeverityClassificationBenchLogs covers every severity class plus
+// absent, empty, and non-string resource context values. The paired benchmark
+// asserts wire/pdata parity before timing this representative consumer path.
+func createSeverityClassificationBenchLogs() plog.Logs {
+	logs := plog.NewLogs()
+	severities := []plog.SeverityNumber{
+		plog.SeverityNumberUnspecified,
+		plog.SeverityNumberTrace,
+		plog.SeverityNumberDebug,
+		plog.SeverityNumberInfo,
+		plog.SeverityNumberWarn,
+		plog.SeverityNumberError,
+	}
+
+	for resourceIndex := 0; resourceIndex < 5; resourceIndex++ {
+		resource := logs.ResourceLogs().AppendEmpty()
+		switch resourceIndex {
+		case 0:
+			resource.Resource().Attributes().PutStr("service.name", "checkout")
+			resource.Resource().Attributes().PutStr("deployment.environment", "production")
+		case 1:
+			resource.Resource().Attributes().PutStr("service.name", "")
+			resource.Resource().Attributes().PutStr("deployment.environment", "staging")
+		case 2:
+			resource.Resource().Attributes().PutInt("service.name", 42)
+			resource.Resource().Attributes().PutStr("deployment.environment", "development")
+		case 3:
+			resource.Resource().Attributes().PutStr("service.name", "payments")
+			resource.Resource().Attributes().PutInt("deployment.environment", 7)
+		case 4:
+			// Deliberately omit both attributes.
+		}
+
+		scope := resource.ScopeLogs().AppendEmpty()
+		for recordIndex := 0; recordIndex < 120; recordIndex++ {
+			record := scope.LogRecords().AppendEmpty()
+			record.Body().SetStr("representative application log message")
+			record.Attributes().PutStr("logger.name", "checkout.handler")
+			record.Attributes().PutStr("http.request.method", "GET")
+			severity := severities[recordIndex%len(severities)]
+			if severity != plog.SeverityNumberUnspecified {
+				record.SetSeverityNumber(severity)
+			}
 		}
 	}
 	return logs
