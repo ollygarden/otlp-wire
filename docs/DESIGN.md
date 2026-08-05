@@ -111,7 +111,7 @@ func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error)
 - `ScopeLogs.LogRecordsSeq(func(LogRecord, error) bool)`
 - `LogRecord.SeverityNumber() (int32, error)`
 
-## Log Depth and Resource Attribute Access (E-2892)
+## Log Depth and Resource Attribute Access
 
 Logs expose the same raw-byte progression used by traces and metrics:
 

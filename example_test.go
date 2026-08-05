@@ -141,9 +141,9 @@ func ExampleMetric_DataPoints() {
 // without unmarshaling the OTLP request.
 func ExampleResourceLogs_StringAttribute() {
 	logs := plog.NewLogs()
-	resource := logs.ResourceLogs().AppendEmpty()
-	resource.Resource().Attributes().PutStr("service.name", "checkout")
-	scope := resource.ScopeLogs().AppendEmpty()
+	pdataResource := logs.ResourceLogs().AppendEmpty()
+	pdataResource.Resource().Attributes().PutStr("service.name", "checkout")
+	scope := pdataResource.ScopeLogs().AppendEmpty()
 	scope.LogRecords().AppendEmpty().SetSeverityNumber(plog.SeverityNumberWarn)
 
 	data, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
@@ -154,8 +154,8 @@ func ExampleResourceLogs_StringAttribute() {
 
 	request := otlpwire.ExportLogsServiceRequest(data)
 	resources, resourceErr := request.ResourceLogs()
-	for resource := range resources {
-		service, found, err := resource.StringAttribute("service.name")
+	for resourceLogs := range resources {
+		service, found, err := resourceLogs.StringAttribute("service.name")
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -165,7 +165,7 @@ func ExampleResourceLogs_StringAttribute() {
 			return
 		}
 
-		scopes, scopeErr := resource.ScopeLogs()
+		scopes, scopeErr := resourceLogs.ScopeLogs()
 		for scope := range scopes {
 			for record, err := range scope.LogRecordsSeq {
 				if err != nil {

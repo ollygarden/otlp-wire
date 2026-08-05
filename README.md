@@ -229,8 +229,19 @@ func (r Resource) StringAttribute(key string) ([]byte, bool, error)
 
 `Resource.StringAttribute` is zero-copy and returns a separate `found` value,
 so a missing resource attribute can be distinguished from a present empty
-string. Convert the existing resource bytes without copying:
-`attrs := otlpwire.Resource(resourceBytes)`.
+string. It inspects one Resource message; convert the existing resource bytes
+without copying: `attrs := otlpwire.Resource(resourceBytes)`.
+
+`ResourceLogs.StringAttribute` is the preferred accessor when starting from a
+`ResourceLogs`: it merges every encoded singular Resource message in wire
+order, validates later Resource messages, and matches pdata by retaining the
+first value for duplicate attribute keys.
+
+`KeyValue.ValueRaw` remains a lightweight view of the first encoded AnyValue
+field for hashing-oriented hot paths. `KeyValue.StringValue` fully parses
+AnyValue and follows protobuf oneof behavior, so a later non-string oneof
+member makes `StringValue` report `found=false` even if an earlier encoded
+member was a string.
 
 `DataPoint` carries its `MetricType` because the attribute field number differs
 per data point wire type (histograms and exponential histograms encode

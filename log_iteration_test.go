@@ -109,7 +109,9 @@ func TestLogTraversalAndResourceAttributes(t *testing.T) {
 	request := ExportLogsServiceRequest(marshalLogs(t, logs))
 	resources, resourceErr := request.ResourceLogs()
 	seen := 0
+	resourceCount := 0
 	for resource := range resources {
+		resourceCount++
 		scopes, scopeErr := resource.ScopeLogs()
 		for scope := range scopes {
 			records, recordErr := scope.LogRecords()
@@ -148,6 +150,7 @@ func TestLogTraversalAndResourceAttributes(t *testing.T) {
 		}
 	}
 	require.NoError(t, resourceErr())
+	require.Equal(t, 2, resourceCount)
 	require.Equal(t, 2, seen)
 }
 
@@ -159,7 +162,9 @@ func TestResourceStringAttribute_EmptyAndNonString(t *testing.T) {
 
 	request := ExportLogsServiceRequest(marshalLogs(t, logs))
 	resources, resourceErr := request.ResourceLogs()
+	resourceCount := 0
 	for resource := range resources {
+		resourceCount++
 		raw, err := resource.Resource()
 		require.NoError(t, err)
 		attrs := Resource(raw)
@@ -176,6 +181,7 @@ func TestResourceStringAttribute_EmptyAndNonString(t *testing.T) {
 		require.Nil(t, value)
 	}
 	require.NoError(t, resourceErr())
+	require.Equal(t, 1, resourceCount)
 }
 
 func TestKeyValueRawAccessors_PreserveFirstEncodedOccurrence(t *testing.T) {
@@ -475,7 +481,9 @@ func TestScopeLogsLogRecords_EarlyStop(t *testing.T) {
 
 	request := ExportLogsServiceRequest(marshalLogs(t, logs))
 	resources, resourceErr := request.ResourceLogs()
+	resourceCount := 0
 	for resource := range resources {
+		resourceCount++
 		scopes, scopeErr := resource.ScopeLogs()
 		for scope := range scopes {
 			sequence, recordErr := scope.LogRecords()
@@ -490,6 +498,7 @@ func TestScopeLogsLogRecords_EarlyStop(t *testing.T) {
 		require.NoError(t, scopeErr())
 	}
 	require.NoError(t, resourceErr())
+	require.Equal(t, 1, resourceCount)
 }
 
 func TestLogWireAccessors_MalformedAndWrongWire(t *testing.T) {

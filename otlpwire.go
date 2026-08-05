@@ -167,7 +167,7 @@ func (r ResourceLogs) StringAttribute(key string) ([]byte, bool, error) {
 		pos += tagLen
 
 		switch fieldNum {
-		case 1: // Resource.attributes
+		case 1: // ResourceLogs.resource
 			if wireType != protowire.BytesType {
 				return nil, false, errors.New("wrong wire type for resource logs resource")
 			}
@@ -1340,10 +1340,6 @@ func parseAnyValueDepth(data []byte, value *parsedAnyValue, depth int) error {
 	return nil
 }
 
-func validateArrayValue(data []byte) error {
-	return validateArrayValueDepth(data, 0)
-}
-
 func validateArrayValueDepth(data []byte, depth int) error {
 	if depth > semanticParseMaxDepth {
 		return errSemanticParseDepth
@@ -1376,10 +1372,6 @@ func validateArrayValueDepth(data []byte, depth int) error {
 		pos += n
 	}
 	return nil
-}
-
-func validateKeyValueList(data []byte) error {
-	return validateKeyValueListDepth(data, 0)
 }
 
 func validateKeyValueListDepth(data []byte, depth int) error {
