@@ -20,8 +20,10 @@ compatible.
 ## Package shape
 
 The repository is one Go module and one package. Production implementation is
-kept in `otlpwire.go`; pdata is used only in tests and benchmarks as a fixture
-builder and semantic oracle.
+split by domain: public wire types, metrics, logs, traces, shared attribute
+semantics, and low-level wire helpers. The file boundary is organizational,
+not an abstraction layer; all code remains in package `otlpwire`. pdata is used
+only in tests and benchmarks as a fixture builder and semantic oracle.
 
 The public wire hierarchy is:
 

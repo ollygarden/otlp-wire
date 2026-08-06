@@ -33,10 +33,13 @@ before/after results under the same conditions.
 
 ## Architecture
 
-This is one package and one module, `go.olly.garden/otlp-wire`. The
-implementation is in `otlpwire.go`; functional tests are in
-`otlpwire_test.go`, usage examples in `example_test.go`, and comparative
-benchmarks in `benchmark_comparison_test.go`.
+This is one package and one module, `go.olly.garden/otlp-wire`. Production
+code is split by domain: public types in `types.go`, signal traversal in
+`metrics.go`, `logs.go`, and `traces.go`, shared attribute semantics in
+`attributes.go`, and low-level protobuf walking in `wire.go`. Functional tests
+are in `otlpwire_test.go` and `log_iteration_test.go`, usage examples in
+`example_test.go`, and comparative benchmarks in
+`benchmark_comparison_test.go`.
 
 Public wire types are byte slices or small wrappers over byte slices. They
 navigate protobuf fields directly with `protowire.ConsumeTag`,
@@ -126,6 +129,8 @@ README, and the public API synchronized.
 - Update the specification when an API, behavioral contract, consumer
   dependency, or rollout gate changes. Keep temporary implementation plans out
   of the repository unless maintainers explicitly request one.
+- Read [operations.md](operations.md) before releasing the library or changing
+  a consumer rollout boundary.
 
 Avoid breaking exported APIs or iterator/error behavior. If a change must be
 incompatible, document the migration, update examples and design material, and
