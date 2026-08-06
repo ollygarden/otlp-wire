@@ -118,12 +118,14 @@ README, and the public API synchronized.
 
 ## Documentation and workflow
 
+- [docs/specification.md](docs/specification.md) is the canonical product,
+  compatibility, consumer, and rollout contract.
 - [docs/DESIGN.md](docs/DESIGN.md) records wire-format design decisions.
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) records benchmark fixtures and
   methodology.
-- Substantial API or performance work may include a design specification in
-  `docs/superpowers/specs/` and an implementation plan in
-  `docs/superpowers/plans/`.
+- Update the specification when an API, behavioral contract, consumer
+  dependency, or rollout gate changes. Keep temporary implementation plans out
+  of the repository unless maintainers explicitly request one.
 
 Avoid breaking exported APIs or iterator/error behavior. If a change must be
 incompatible, document the migration, update examples and design material, and

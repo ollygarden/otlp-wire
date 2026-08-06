@@ -330,6 +330,7 @@ For detailed benchmarks and methodology, see [BENCHMARKS.md](docs/BENCHMARKS.md)
 
 ## Documentation
 
+- **[specification.md](docs/specification.md)** - Product boundary, compatibility contracts, consumers, and rollout gates
 - **[DESIGN.md](docs/DESIGN.md)** - Architecture, design decisions, and implementation details
 - **[BENCHMARKS.md](docs/BENCHMARKS.md)** - Performance comparison and methodology
 - **[example_test.go](example_test.go)** - Complete working examples (observability metrics, sharding, sampling)
