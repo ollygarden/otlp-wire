@@ -150,7 +150,8 @@ The three `Resource()` methods therefore share one extractor. The three
 `WriteTo` methods share one writer that prefixes the unchanged resource
 container with an export-request field tag and length. Direct `io.Writer`
 output avoids an intermediate request buffer and preserves the writer's byte
-count and error.
+count and error. In v0.0.4, a short byte count with a nil error is returned as
+reported; `WriteTo` does not synthesize `io.ErrShortWrite`.
 
 ## Error and compatibility strategy
 
