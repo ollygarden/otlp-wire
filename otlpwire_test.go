@@ -1671,6 +1671,19 @@ func TestDataPointsSeq_WrongWireTypeBody(t *testing.T) {
 	m = protowire.AppendTag(m, 5, protowire.VarintType)
 	m = protowire.AppendVarint(m, 1)
 
+	var scopeMetrics []byte
+	scopeMetrics = protowire.AppendTag(scopeMetrics, 2, protowire.BytesType)
+	scopeMetrics = protowire.AppendBytes(scopeMetrics, m)
+	var resourceMetrics []byte
+	resourceMetrics = protowire.AppendTag(resourceMetrics, 2, protowire.BytesType)
+	resourceMetrics = protowire.AppendBytes(resourceMetrics, scopeMetrics)
+	var request ExportMetricsServiceRequest
+	request = protowire.AppendTag(request, 1, protowire.BytesType)
+	request = protowire.AppendBytes(request, resourceMetrics)
+
+	_, err := request.DataPointCount()
+	require.Error(t, err)
+
 	sawErr := false
 	for _, err := range m.DataPointsSeq {
 		if err != nil {

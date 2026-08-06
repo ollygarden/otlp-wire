@@ -163,11 +163,10 @@ types in typed accessors and iterators surface as errors. Semantic nested-value
 parsing has a finite depth budget so adversarial data cannot recurse without
 bound.
 
-The current counting walk has one exception: `DataPointCount` skips a
-recognized metric-body tag with a non-length-delimited wire type, whereas the
-data-point iterators reject it. This is historical behavior, not a pattern to
-copy. A refactor should resolve it deliberately and cover the decision with a
-test.
+`DataPointCount` and the data-point iterators apply the same wire-type checks
+to recognized metric-body fields. A non-length-delimited gauge, sum,
+histogram, exponential histogram or summary is rejected rather than silently
+skipped.
 
 There are two intentional semantic levels:
 

@@ -162,11 +162,12 @@ semantically validate every nested field inside each returned container.
 Consumers that require full-request validity must traverse the required fields
 or fall back to pdata.
 
-There is one known strictness asymmetry in v0.0.4: `DataPointCount` skips a
-recognized metric-body field when it has a non-length-delimited wire type,
-while `Metric.DataPoints` and `DataPointsSeq` reject the same input. A refactor
-must preserve this only if compatibility evidence requires it; otherwise fix
-it as an explicit behavioral change with a regression test.
+In v0.0.4, `DataPointCount` skips a recognized metric-body field with a
+non-length-delimited wire type while `Metric.DataPoints` and `DataPointsSeq`
+reject it. The unreleased E-2928 change aligns the count path with the
+iterators, preventing corrupt input from being reported as a valid
+zero-data-point metric. Update this document's version boundary when that
+change is released.
 
 ### Resources and attributes
 

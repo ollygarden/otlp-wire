@@ -234,7 +234,11 @@ func countInMetric(data []byte) (int, error) {
 		pos += tagLen
 
 		// Metric types: field 5=Gauge, 7=Sum, 9=Histogram, 10=ExponentialHistogram, 11=Summary
-		if (fieldNum == 5 || fieldNum == 7 || fieldNum == 9 || fieldNum == 10 || fieldNum == 11) && wireType == protowire.BytesType {
+		isBody := fieldNum == 5 || fieldNum == 7 || fieldNum == 9 || fieldNum == 10 || fieldNum == 11
+		if isBody && wireType != protowire.BytesType {
+			return 0, errors.New("wrong wire type for metric data")
+		}
+		if isBody {
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
 				return 0, errors.New("invalid bytes in metric data")
