@@ -129,11 +129,12 @@ the whole known LogRecord structure so an early severity field cannot hide
 trailing corruption, and it implements protobuf last-value-wins scalar
 semantics.
 
-`ResourceLogs.StringAttribute` works on the enclosing ResourceLogs rather than
-only the first Resource field. This is intentional: protobuf singular message
-fields merge when repeated. The implementation scans all occurrences, retains
-the first duplicate attribute key as pdata does, and still validates later
-messages.
+Resource context comes from `ResourceLogs.Resource()`, which merges every
+Resource occurrence for this container (see "Resource extraction" below) so
+callers get pdata-compatible resource attributes without a bespoke
+per-container-type accessor. `ResourceLogs.StringAttribute` (removed in
+E-2941) previously played that role directly; its replacement is
+`rl.Resource()` followed by `Resource.StringAttribute`.
 
 ### Traces
 
@@ -148,12 +149,67 @@ Resource containers share the same outer protobuf shape across metrics, logs
 and traces: Resource is field 1, the repeated scope container is field 2, and
 the export request repeats resource containers in field 1.
 
-The three `Resource()` methods therefore share one extractor. The three
-`WriteTo` methods share one writer that prefixes the unchanged resource
-container with an export-request field tag and length. Direct `io.Writer`
-output avoids an intermediate request buffer and preserves the writer's byte
-count and error. In v0.0.4, a short byte count with a nil error is returned as
-reported; `WriteTo` does not synthesize `io.ErrShortWrite`.
+The three `Resource()` methods therefore share one extractor,
+`extractResourceMessage`. Its contract, decided for E-2941:
+
+- **Absence is not an error.** OTLP declares the Resource field optional, and
+  pdata accepts a container without it, reporting an empty Resource. The
+  extractor returns `(nil, nil)` for absence, matching the convention already
+  used by `extractBytesField`, `extractFixed64Field`, and
+  `extractFixedBytesField` elsewhere in `wire.go`. A malformed occurrence
+  (wrong wire type, bad length) is still an error.
+- **Exactly one Resource, merged.** `ResourceMetrics`/`ResourceLogs`/
+  `ResourceSpans` have exactly one pdata-visible Resource, matching pdata's
+  object model. Protobuf merges repeated occurrences of a singular message
+  field, and pdata performs that merge, so `Resource()` does too instead of
+  returning only the first occurrence (the pre-E-2941 behavior).
+- **Zero-copy for the case that matters.** A single Resource occurrence is
+  what every real producer emits. That case returns a slice aliasing the
+  input, with no allocation — this is a hard performance gate, verified by
+  `testing.AllocsPerRun` in `resource_test.go` and by
+  `BenchmarkResource_SingleOccurrence`. Two or more occurrences are merged by
+  concatenating their encoded bodies into one new buffer. Concatenation was
+  verified byte-equivalent to protobuf's field-by-field merge for singular
+  message fields (distinct keys, duplicate keys, 3+ occurrences), so it
+  reproduces pdata's result without a general recursive merge implementation.
+  This is the one documented exception to "accessors never allocate for
+  valid, real-world input": multi-occurrence Resource is a real but marginal
+  wire shape, and the alternative (a recursive field-by-field merge to stay
+  zero-copy) would add real complexity for a case no known producer emits.
+- **Occurrences are validated before they are joined.** Concatenation must not
+  manufacture validity that was never on the wire. A Resource split across two
+  occurrences — the first declaring a length it does not carry, the second
+  supplying the remainder — has two halves that each fail to parse alone but
+  concatenate into a valid message. pdata parses occurrences independently and
+  rejects that payload; joining unchecked would make the wire path accept what
+  the pdata fallback refuses. `validateMessageFraming` therefore walks each
+  occurrence first. It is structural only and allocation-free, and it runs
+  exclusively on the multi-occurrence path, so the single-occurrence hot path
+  keeps its measured cost. `TestResource_SplicedOccurrencesRejected` pins the
+  behavior against pdata; `TestResource_ValidOccurrencesStillMerge` guards
+  against it becoming over-strict.
+
+**Validation-scope change.** Finding every occurrence to merge correctly
+requires scanning the complete container, so `extractResourceMessage` can no
+longer return as soon as it finds the first Resource field the way the
+pre-E-2941 version did (and the way the other single-field extractors in
+`wire.go` still do for fields that do not merge). One consequence: a
+malformed field located *after* the last Resource occurrence in the container
+is now reported as an error, where the shallow, first-match extractor never
+reached it. This is an intentional, narrow expansion of validation scope for
+this one accessor — see the "Resources and attributes" section of
+[specification.md](specification.md) — not a general change to the "iterators
+validate operation-scoped" contract. The added scan is cheap:
+`protowire.ConsumeFieldValue` on a length-delimited field only reads the
+length prefix and skips the body, so scanning the remaining top-level tags is
+O(1) per tag regardless of payload size, confirmed by
+`BenchmarkResource_SingleOccurrence` (see [BENCHMARKS.md](BENCHMARKS.md)).
+
+The three `WriteTo` methods share one writer that prefixes the unchanged
+resource container with an export-request field tag and length. Direct
+`io.Writer` output avoids an intermediate request buffer and preserves the
+writer's byte count and error. In v0.0.4, a short byte count with a nil error
+is returned as reported; `WriteTo` does not synthesize `io.ErrShortWrite`.
 
 ## Error and compatibility strategy
 
@@ -177,8 +233,12 @@ they do not need while giving routing and detector paths a parity-oriented API.
 ## Performance design
 
 Counting uses direct tag walks and remains allocation-free. Returned byte
-slices alias the input. Ordinary iterator cost is explicit and amortized at
-outer levels; zero-allocation yield variants cover repeated inner levels.
+slices alias the input, with one documented exception: `Resource()` allocates
+a concatenated buffer when a container carries 2+ Resource occurrences (see
+"Resource extraction and WriteTo" above); the single-occurrence case every
+real producer emits stays zero-copy. Ordinary iterator cost is explicit and
+amortized at outer levels; zero-allocation yield variants cover repeated
+inner levels.
 
 No production path imports pdata or generated OTLP message types. Benchmarks
 compare equivalent work, use pdata as the full-decode baseline, report

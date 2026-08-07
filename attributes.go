@@ -64,64 +64,6 @@ func (r Resource) StringAttribute(key string) ([]byte, bool, error) {
 	return state.value, state.found, nil
 }
 
-// StringAttribute returns a string resource attribute from all Resource
-// messages encoded in this ResourceLogs. Singular Resource messages merge in
-// wire order; resource attributes retain pdata's first-value-wins behavior for
-// duplicate keys across the merged messages.
-func (r ResourceLogs) StringAttribute(key string) ([]byte, bool, error) {
-	var state resourceStringAttributeState
-	data := []byte(r)
-	pos := 0
-	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return nil, false, errors.New("malformed protobuf tag")
-		}
-		pos += tagLen
-
-		switch fieldNum {
-		case 1: // ResourceLogs.resource
-			if wireType != protowire.BytesType {
-				return nil, false, errors.New("wrong wire type for resource logs resource")
-			}
-			resource, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return nil, false, errors.New("invalid bytes in resource logs resource")
-			}
-			pos += n
-			if err := scanResourceStringAttribute(resource, key, &state); err != nil {
-				return nil, false, err
-			}
-		case 2: // ResourceLogs.scope_logs
-			if wireType != protowire.BytesType {
-				return nil, false, errors.New("wrong wire type for resource logs scope logs")
-			}
-			_, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return nil, false, errors.New("invalid bytes in resource logs scope logs")
-			}
-			pos += n
-		case 3: // ResourceLogs.schema_url
-			if wireType != protowire.BytesType {
-				return nil, false, errors.New("wrong wire type for resource logs schema url")
-			}
-			_, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return nil, false, errors.New("invalid bytes in resource logs schema url")
-			}
-			pos += n
-		default:
-			n := skipField(data[pos:], fieldNum, wireType)
-			if n < 0 {
-				return nil, false, errors.New("failed to skip field")
-			}
-			pos += n
-		}
-	}
-
-	return state.value, state.found, nil
-}
-
 type anyValueKind uint8
 
 const (
@@ -384,8 +326,11 @@ type resourceStringAttributeState struct {
 
 // scanResourceStringAttribute validates a complete Resource message and
 // records the first matching attribute only. pdata's resource map keeps that
-// first duplicate key, including when multiple singular Resource messages are
-// merged by ResourceLogs.StringAttribute.
+// first duplicate key. When the caller's Resource value came from merging 2+
+// wire occurrences (see extractResourceMessage), the merged bytes already
+// hold every occurrence's attributes concatenated in wire order, so this
+// single pass reproduces the merge's first-value-wins behavior without any
+// extra merge-aware logic here.
 func scanResourceStringAttribute(data []byte, key string, state *resourceStringAttributeState) error {
 	pos := 0
 	for pos < len(data) {

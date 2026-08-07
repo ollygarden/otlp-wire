@@ -18,10 +18,9 @@ type ResourceLogs []byte
 
 // Resource represents a Resource message (raw wire bytes).
 //
-// Resource values are normally obtained by converting the bytes returned by a
-// ResourceMetrics, ResourceLogs, or ResourceSpans Resource method. This keeps
-// those established methods source-compatible while providing attribute
-// accessors for callers that need resource context.
+// Resource values are normally obtained from a ResourceMetrics, ResourceLogs,
+// or ResourceSpans Resource method, which returns exactly one merged Resource
+// per container, matching pdata's object model.
 type Resource []byte
 
 // ScopeLogs represents a single ScopeLogs message (raw wire bytes).

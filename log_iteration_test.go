@@ -344,7 +344,13 @@ func TestResourceStringAttribute_EntityRefPdataParity(t *testing.T) {
 	}
 }
 
-func TestResourceLogsStringAttribute_MergedResourcesPdataParity(t *testing.T) {
+// TestResourceLogsResource_MergedResourcesPdataParity covers the migration
+// path documented for the removed ResourceLogs.StringAttribute:
+// rl.Resource() then res.StringAttribute(key). ResourceLogs.Resource() merges
+// repeated singular Resource occurrences (see extractResourceMessage), and
+// Resource.StringAttribute retains pdata's first-duplicate-key-wins behavior
+// over the merged bytes.
+func TestResourceLogsResource_MergedResourcesPdataParity(t *testing.T) {
 	stringAttribute := func(key, value string) []byte {
 		var anyValue []byte
 		anyValue = protowire.AppendTag(anyValue, 1, protowire.BytesType)
@@ -366,7 +372,10 @@ func TestResourceLogsStringAttribute_MergedResourcesPdataParity(t *testing.T) {
 	first := stringAttribute("service.name", "checkout")
 	second := stringAttribute("service.name", "payments")
 	merged := appendResource(appendResource(nil, first), second)
-	value, found, err := ResourceLogs(merged).StringAttribute("service.name")
+
+	resource, err := ResourceLogs(merged).Resource()
+	require.NoError(t, err)
+	value, found, err := resource.StringAttribute("service.name")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "checkout", string(value), "pdata retains the first duplicate key across merged Resources")
@@ -377,10 +386,20 @@ func TestResourceLogsStringAttribute_MergedResourcesPdataParity(t *testing.T) {
 	require.True(t, pdataFound)
 	require.Equal(t, "checkout", pdataValue.Str())
 
+	// A third Resource occurrence with malformed content (a wrong wire type
+	// for Resource.attributes) is not caught by Resource() itself: extraction
+	// only concatenates raw occurrence bytes and does not parse Resource
+	// internals, the same as the other shallow field extractors in wire.go.
+	// The error surfaces one step later, when the semantic accessor parses
+	// the merged bytes -- exactly the rl.Resource() + res.StringAttribute()
+	// sequence that replaces the removed ResourceLogs.StringAttribute.
 	malformedLaterResource := appendResource(merged, []byte{0x08, 0x01})
-	_, _, wireErr := ResourceLogs(malformedLaterResource).StringAttribute("service.name")
+	malformedResourceView, wireErr := ResourceLogs(malformedLaterResource).Resource()
+	require.NoError(t, wireErr, "extraction concatenates raw bytes without validating occurrence internals")
+	_, _, attrErr := malformedResourceView.StringAttribute("service.name")
+	require.Error(t, attrErr, "the semantic accessor parses the merged bytes and reports the malformed occurrence")
+
 	_, pdataErr := (&plog.ProtoUnmarshaler{}).UnmarshalLogs(exportLogsWithResourceLogs(malformedLaterResource))
-	require.Error(t, wireErr)
 	require.Error(t, pdataErr)
 }
 

@@ -148,19 +148,18 @@ func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], fu
 ```go
 type ResourceMetrics []byte
 func (r ResourceMetrics) DataPointCount() (int, error)
-func (r ResourceMetrics) Resource() ([]byte, error)
+func (r ResourceMetrics) Resource() (Resource, error)
 func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error)
 
 type ResourceLogs []byte
 func (r ResourceLogs) LogRecordCount() (int, error)
-func (r ResourceLogs) Resource() ([]byte, error)
+func (r ResourceLogs) Resource() (Resource, error)
 func (r ResourceLogs) WriteTo(w io.Writer) (int64, error)
 func (r ResourceLogs) ScopeLogs() (iter.Seq[ScopeLogs], func() error)
-func (r ResourceLogs) StringAttribute(key string) ([]byte, bool, error)
 
 type ResourceSpans []byte
 func (r ResourceSpans) SpanCount() (int, error)
-func (r ResourceSpans) Resource() ([]byte, error)
+func (r ResourceSpans) Resource() (Resource, error)
 func (r ResourceSpans) WriteTo(w io.Writer) (int64, error)
 func (r ResourceSpans) ScopeSpans() (iter.Seq[ScopeSpans], func() error)
 ```
@@ -229,13 +228,25 @@ func (r Resource) StringAttribute(key string) ([]byte, bool, error)
 
 `Resource.StringAttribute` is zero-copy and returns a separate `found` value,
 so a missing resource attribute can be distinguished from a present empty
-string. It inspects one Resource message; convert the existing resource bytes
-without copying: `attrs := otlpwire.Resource(resourceBytes)`.
+string. It inspects one Resource message obtained from a `ResourceMetrics`,
+`ResourceLogs`, or `ResourceSpans` `Resource()` method.
 
-`ResourceLogs.StringAttribute` is the preferred accessor when starting from a
-`ResourceLogs`: it merges every encoded singular Resource message in wire
-order, validates later Resource messages, and matches pdata by retaining the
-first value for duplicate attribute keys.
+Each container type — `ResourceMetrics`, `ResourceLogs`, `ResourceSpans` — has
+exactly one `Resource`, matching pdata's object model. `Resource()` returns
+`(nil, nil)` when the field is absent (OTLP declares it optional), aliases the
+input with no copy for the single occurrence every real producer emits, and
+merges 2+ occurrences by concatenating their encoded bodies into a new buffer
+— byte-equivalent to protobuf's merge for singular message fields. To read a
+resource string attribute starting from a `ResourceLogs`/`ResourceMetrics`/`ResourceSpans`,
+call `Resource()` then `Resource.StringAttribute`:
+
+```go
+resource, err := resourceLogs.Resource()
+if err != nil {
+    return err
+}
+value, found, err := resource.StringAttribute("service.name")
+```
 
 `KeyValue.ValueRaw` remains a lightweight view of the first encoded AnyValue
 field for hashing-oriented hot paths. `KeyValue.StringValue` fully parses
