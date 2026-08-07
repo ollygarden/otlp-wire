@@ -728,14 +728,8 @@ func BenchmarkMetrics_ResourceExtraction_Unmarshal(b *testing.B) {
 	}
 }
 
-// BenchmarkResource_SingleOccurrence isolates ResourceMetrics.Resource()
-// itself (no outer iterator cost) on the common, single-Resource-occurrence
-// container that every real producer emits. E-2941's hard performance gate is
-// that this path stays zero-allocation: extracting the Resource returns a
-// slice aliasing the input instead of copying it, even though the underlying
-// extractor now scans the complete container (to find every Resource
-// occurrence for merging) rather than returning as soon as it finds the
-// field.
+// BenchmarkResource_SingleOccurrence covers the common single-occurrence
+// container. The performance gate is that this path stays zero-allocation.
 func BenchmarkResource_SingleOccurrence(b *testing.B) {
 	container := containerWithResource(resourceWithStringAttr("service.name", "checkout"))
 	rm := ResourceMetrics(container)
@@ -1047,12 +1041,9 @@ func containerWithScopes(n int) []byte {
 	return out
 }
 
-// BenchmarkResource_ScanScaling pins the complexity of Resource(). Merging
-// repeated occurrences requires scanning every top-level field of the
-// container, so the cost grows with the number of scope entries rather than
-// staying constant the way the pre-v0.1.0 first-match-and-return
-// implementation did. These numbers are the evidence behind the scaling note
-// in docs/BENCHMARKS.md; keep them honest if the traversal changes.
+// BenchmarkResource_ScanScaling pins the complexity of Resource(): merging
+// requires scanning every top-level field, so cost grows with the scope count
+// instead of staying constant. Backs the scaling table in docs/BENCHMARKS.md.
 func BenchmarkResource_ScanScaling(b *testing.B) {
 	for _, scopes := range []int{1, 10, 50} {
 		b.Run(fmt.Sprintf("scopes=%d", scopes), func(b *testing.B) {

@@ -1,12 +1,9 @@
 package otlpwire
 
-// Differential and structural tests for Resource(), covering E-2941: the
-// container's single Resource is optional (absence is not an error) and
-// repeated singular Resource occurrences merge, matching pdata's object
-// model. Fixtures are built directly with protowire because pdata's public
-// API cannot emit the omitted-field, present-but-empty, or repeated-singular-
-// field shapes under test; pdata is still used as the oracle for what those
-// wire bytes mean once parsed.
+// Tests for Resource(): the container's single Resource is optional, and
+// repeated singular occurrences merge, matching pdata. Fixtures are built with
+// protowire because pdata's API cannot emit the omitted, empty, or
+// repeated-singular shapes under test; pdata remains the oracle for meaning.
 
 import (
 	"bytes"
@@ -86,9 +83,8 @@ type resourceGetter interface {
 type signalFixture struct {
 	name string
 	wrap func([]byte) resourceGetter
-	// attrs unmarshals payload (a full export request) with the matching
-	// pdata OTLP package and returns the single resource container's
-	// Resource attributes, the oracle for merge and absence behavior.
+	// attrs returns the container's Resource attributes via pdata, the oracle
+	// for merge and absence behavior.
 	attrs func(t *testing.T, payload []byte) pcommon.Map
 }
 
@@ -131,8 +127,7 @@ var signalFixtures = []signalFixture{
 // ---------- absence and empty-but-present ----------
 
 // TestResource_AbsentField proves the omitted-Resource payload is valid OTLP
-// -- pdata unmarshals it and reports zero attributes -- and that Resource()
-// now agrees: (nil, nil), not an error.
+// and that Resource() now agrees: (nil, nil), not an error.
 func TestResource_AbsentField(t *testing.T) {
 	container := scopeContainerNoResource()
 	payload := wrapAsRequest(container)
@@ -169,11 +164,9 @@ func TestResource_PresentButEmpty(t *testing.T) {
 
 // ---------- single occurrence: the hot, zero-copy path ----------
 
-// TestResource_SingleOccurrence_IsZeroCopy proves the common case -- exactly
-// one Resource occurrence, what every real producer emits -- returns a slice
-// that aliases the source buffer rather than a copy. Mutating the source
-// buffer's resource region is observed through the returned slice, which
-// only holds if they share the same backing array.
+// TestResource_SingleOccurrence_IsZeroCopy proves the common case returns a
+// slice aliasing the source buffer rather than a copy, and that the returned
+// view cannot be appended into its neighbours.
 func TestResource_SingleOccurrence_IsZeroCopy(t *testing.T) {
 	res := resourceWithStringAttr("service.name", "checkout")
 	baseContainer := containerWithResource(res)
@@ -201,9 +194,8 @@ func TestResource_SingleOccurrence_IsZeroCopy(t *testing.T) {
 			idx := bytes.Index(container, res)
 			require.GreaterOrEqual(t, idx, 0, "resource bytes must appear in the container")
 
-			// Prove the whole region aliases, not just its first byte: flip
-			// every byte of the resource in the container and require the
-			// returned slice to reflect all of it.
+			// Flip every byte, not just the first: proves the whole region
+			// aliases rather than one lucky offset.
 			before := append([]byte(nil), got...)
 			for i := range res {
 				container[idx+i] ^= 0xFF
@@ -215,10 +207,8 @@ func TestResource_SingleOccurrence_IsZeroCopy(t *testing.T) {
 					"byte %d must reflect the source mutation", i)
 			}
 
-			// The view must not be append-extendable into its neighbours:
-			// protowire.ConsumeBytes hands back a slice whose capacity runs to
-			// the end of the container, so an unclamped return would let a
-			// caller's append silently overwrite the sibling scope field.
+			// An unclamped capacity would let a caller's append overwrite the
+			// sibling scope field.
 			require.Equal(t, len(got), cap(got),
 				"capacity must be clamped so append reallocates instead of corrupting the container")
 			tail := append([]byte(nil), container[idx+len(res):]...)
@@ -411,17 +401,9 @@ func TestResource_UnknownAndOutOfOrderFieldsSkipped(t *testing.T) {
 }
 
 // TestResource_SplicedOccurrencesRejected pins the boundary that makes merging
-// by concatenation safe. A Resource can be split across two occurrences so
-// that neither half parses alone — the first declares a length it does not
-// carry, the second supplies the remainder — while their concatenation is a
-// perfectly valid Resource.
-//
-// pdata parses each occurrence of a repeated singular message field
-// independently and rejects such a payload. Concatenating without checking
-// would reassemble the halves and report success, so the wire fast path would
-// accept a payload its pdata fallback rejects. bindweed and sage both rely on
-// that parity: "Each occurrence must parse on its own, so a payload spliced
-// across occurrences fails exactly like it does on the pdata path."
+// by concatenation safe. Neither half of a spliced Resource parses alone, but
+// their concatenation does; pdata rejects such a payload, so merging without
+// checking would make the wire path accept what its pdata fallback refuses.
 func TestResource_SplicedOccurrencesRejected(t *testing.T) {
 	full := resourceWithStringAttr("service.name", "checkout")
 	cut := 12 // lands inside the attributes field, after its length prefix
