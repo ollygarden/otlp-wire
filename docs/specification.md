@@ -185,9 +185,16 @@ was not. See "Resources and attributes" below for the full contract.
 
 `ResourceMetrics.Resource()`, `ResourceLogs.Resource()`, and
 `ResourceSpans.Resource()` each return `(Resource, error)`: exactly one typed
-Resource per container, matching pdata's object model. `Resource` is declared
-as `[]byte` (`type Resource []byte`), so this stays source-compatible with
-code written against the previous `([]byte, error)` signature.
+Resource per container, matching pdata's object model.
+
+`Resource` is declared as `[]byte` (`type Resource []byte`), so a returned
+value assigns to a `[]byte` variable, passes to a `[]byte` parameter, and
+appends to a `[][]byte` without conversion. That covers how callers use the
+method directly, and every consumer surveyed for E-2941 compiles unchanged.
+It is not general source compatibility, though: the *method signature* changed,
+so an interface declaring `Resource() ([]byte, error)` is no longer satisfied,
+and a method value cannot be assigned to a `func() ([]byte, error)` variable.
+Code doing either must be updated.
 
 **Absence is not an error (unreleased, E-2941, v0.1.0).** OTLP declares the
 Resource field optional (`ResourceSpans.resource`, `ResourceLogs.resource`,
@@ -372,7 +379,7 @@ Past feature rollouts established the following sequence:
 | v0.0.2 | Span-level trace access (PR #2) | Adopt partial trace processing in detector services |
 | v0.0.3 | Metrics-depth traversal and zero-allocation variants (E-2608, PR #18) | Release the primitive first, then migrate metrics consumers such as Marigold with parity and production evidence |
 | v0.0.4 | Log traversal, severity and resource strings (E-2892, PR #22) | Release the primitive first, then use separate Bindweed, Mulch and Sage adoption issues (E-2900, E-2905, E-2906) |
-| v0.1.0 (unreleased) | Typed, absence-tolerant, merged `Resource()`; removes `ResourceLogs.StringAttribute` (E-2941) | Breaking: `Resource()` now returns `(Resource, error)` (source-compatible with `[]byte` callers) and no longer errors on an absent Resource field; `rl.StringAttribute(k)` callers migrate to `rl.Resource()` then `res.StringAttribute(k)`. Release the primitive, then coordinate consumer releases per the acceptance gates below before broad upgrades |
+| v0.1.0 (unreleased) | Typed, absence-tolerant, merged `Resource()`; removes `ResourceLogs.StringAttribute` (E-2941) | Breaking: `Resource()` now returns `(Resource, error)` (direct calls stay compatible since `Resource` assigns to `[]byte`, but interfaces and method values typed on the old signature must be updated) and no longer errors on an absent Resource field; `rl.StringAttribute(k)` callers migrate to `rl.Resource()` then `res.StringAttribute(k)`. Release the primitive, then coordinate consumer releases per the acceptance gates below before broad upgrades |
 
 Future capabilities and refactors should follow the same staged model:
 

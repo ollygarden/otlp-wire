@@ -200,10 +200,12 @@ Findings:
   every real producer emits — remains zero-allocation after this change, at
   every container size measured.
 - **This is a complexity change, not a constant-factor one.** The previous
-  implementation returned at the first Resource field, which in practice is
-  the container's first field, making it O(1) in container size. This one is
-  O(number of top-level fields), roughly 8 ns per additional scope entry on
-  this machine.
+  implementation returned at the first Resource field, so its cost was
+  proportional to the number of fields preceding that field — O(1) only for a
+  Resource-first container like this fixture, which is the ordering real
+  producers emit but not one the wire format guarantees. This one is
+  O(number of top-level fields) unconditionally, roughly 8 ns per additional
+  scope entry on this machine.
 - Each skipped field is still cheap: `protowire.ConsumeFieldValue` on a
   length-delimited field reads the length prefix and steps over the body
   without descending into it, so the walk covers the container's tags and
