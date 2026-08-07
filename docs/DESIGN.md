@@ -163,11 +163,6 @@ types in typed accessors and iterators surface as errors. Semantic nested-value
 parsing has a finite depth budget so adversarial data cannot recurse without
 bound.
 
-`DataPointCount` and the data-point iterators apply the same wire-type checks
-to recognized metric-body fields. A non-length-delimited gauge, sum,
-histogram, exponential histogram or summary is rejected rather than silently
-skipped.
-
 There are two intentional semantic levels:
 
 - lightweight field views such as `KeyValue.Key` and `ValueRaw`, which return
