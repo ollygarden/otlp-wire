@@ -20,8 +20,10 @@ compatible.
 ## Package shape
 
 The repository is one Go module and one package. Production implementation is
-kept in `otlpwire.go`; pdata is used only in tests and benchmarks as a fixture
-builder and semantic oracle.
+split by domain: public wire types, metrics, logs, traces, shared attribute
+semantics, and low-level wire helpers. The file boundary is organizational,
+not an abstraction layer; all code remains in package `otlpwire`. pdata is used
+only in tests and benchmarks as a fixture builder and semantic oracle.
 
 The public wire hierarchy is:
 
@@ -161,11 +163,10 @@ types in typed accessors and iterators surface as errors. Semantic nested-value
 parsing has a finite depth budget so adversarial data cannot recurse without
 bound.
 
-The current counting walk has one exception: `DataPointCount` skips a
-recognized metric-body tag with a non-length-delimited wire type, whereas the
-data-point iterators reject it. This is historical behavior, not a pattern to
-copy. A refactor should resolve it deliberately and cover the decision with a
-test.
+`DataPointCount` and the data-point iterators apply the same wire-type checks
+to recognized metric-body fields. A non-length-delimited gauge, sum,
+histogram, exponential histogram or summary is rejected rather than silently
+skipped.
 
 There are two intentional semantic levels:
 

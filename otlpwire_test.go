@@ -1667,9 +1667,52 @@ func TestDataPointsIteration_WrongWireTypeBody(t *testing.T) {
 }
 
 func TestDataPointsSeq_WrongWireTypeBody(t *testing.T) {
+	metrics := pmetric.NewMetrics()
+	metric := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	metric.SetName("wrong.wire.type")
+	metric.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+
+	data, err := (&pmetric.ProtoMarshaler{}).MarshalMetrics(metrics)
+	require.NoError(t, err)
+	request := ExportMetricsServiceRequest(data)
+
 	var m Metric
-	m = protowire.AppendTag(m, 5, protowire.VarintType)
-	m = protowire.AppendVarint(m, 1)
+	resources, resourcesErr := request.ResourceMetrics()
+	for resource := range resources {
+		scopes, scopesErr := resource.ScopeMetrics()
+		for scope := range scopes {
+			metricSeq, metricsErr := scope.Metrics()
+			for m = range metricSeq {
+				break
+			}
+			require.NoError(t, metricsErr())
+			break
+		}
+		require.NoError(t, scopesErr())
+		break
+	}
+	require.NoError(t, resourcesErr())
+	require.NotEmpty(t, m)
+
+	pos := 0
+	for {
+		fieldNum, wireType, tagLen := protowire.ConsumeTag(m[pos:])
+		require.Positive(t, tagLen)
+		if fieldNum == 5 {
+			require.Equal(t, protowire.BytesType, wireType)
+			badTag := protowire.AppendTag(nil, fieldNum, protowire.VarintType)
+			require.Len(t, badTag, tagLen)
+			copy(m[pos:pos+tagLen], badTag)
+			break
+		}
+		pos += tagLen
+		fieldLen := skipField(m[pos:], fieldNum, wireType)
+		require.GreaterOrEqual(t, fieldLen, 0)
+		pos += fieldLen
+	}
+
+	_, err = request.DataPointCount()
+	require.Error(t, err)
 
 	sawErr := false
 	for _, err := range m.DataPointsSeq {
