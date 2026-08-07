@@ -142,9 +142,43 @@ func forEachRepeatedField(data []byte, fieldNum protowire.Number, fn func([]byte
 	}
 }
 
-// extractResourceMessage extracts the Resource message (field 1) from
-// ResourceMetrics/ResourceLogs/ResourceSpans messages.
+// validateMessageFraming reports whether data is structurally well-formed:
+// every tag parses, every value is contained, and the walk ends exactly at the
+// end. Structure only, no semantics.
+func validateMessageFraming(data []byte) error {
+	for pos := 0; pos < len(data); {
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			return errors.New("malformed protobuf tag in resource occurrence")
+		}
+		pos += tagLen
+
+		n := skipField(data[pos:], num, wireType)
+		if n < 0 {
+			return errors.New("malformed field in resource occurrence")
+		}
+		pos += n
+	}
+	return nil
+}
+
+// extractResourceMessage returns the Resource message (field 1) of a
+// ResourceMetrics/ResourceLogs/ResourceSpans, merging repeated occurrences the
+// way protobuf and pdata do.
+//
+// An absent field returns (nil, nil); malformed framing returns an error. One
+// occurrence aliases data; two or more are each validated, then concatenated
+// into a new buffer. Locating every occurrence requires scanning the whole
+// container, so a malformed field after the last occurrence is an error too,
+// and the cost grows with the container's field count instead of being
+// constant.
+//
+// docs/DESIGN.md covers why concatenation is a correct merge and why each
+// occurrence is validated first; docs/BENCHMARKS.md has the scan cost.
 func extractResourceMessage(data []byte) ([]byte, error) {
+	var first []byte
+	var found bool
+	var rest [][]byte
 	pos := 0
 
 	for pos < len(data) {
@@ -163,7 +197,15 @@ func extractResourceMessage(data []byte) ([]byte, error) {
 			if n < 0 {
 				return nil, errors.New("invalid bytes in resource field")
 			}
-			return msgBytes, nil
+			pos += n
+
+			if !found {
+				first = msgBytes
+				found = true
+			} else {
+				rest = append(rest, msgBytes)
+			}
+			continue
 		}
 
 		// Skip other fields
@@ -174,7 +216,39 @@ func extractResourceMessage(data []byte) ([]byte, error) {
 		pos += n
 	}
 
-	return nil, errors.New("resource field not found")
+	if !found {
+		return nil, nil
+	}
+	if len(rest) == 0 {
+		// Aliases data. Capacity is clamped so a caller's append reallocates:
+		// ConsumeBytes hands back a slice whose capacity runs to the end of
+		// the container, which would otherwise let append overwrite the
+		// sibling scope field.
+		return first[:len(first):len(first)], nil
+	}
+
+	// Concatenation must not manufacture validity. A Resource spliced across
+	// two occurrences, neither parseable alone, would otherwise reassemble
+	// into a valid message that pdata rejects.
+	if err := validateMessageFraming(first); err != nil {
+		return nil, err
+	}
+	for _, r := range rest {
+		if err := validateMessageFraming(r); err != nil {
+			return nil, err
+		}
+	}
+
+	total := len(first)
+	for _, r := range rest {
+		total += len(r)
+	}
+	merged := make([]byte, 0, total)
+	merged = append(merged, first...)
+	for _, r := range rest {
+		merged = append(merged, r...)
+	}
+	return merged, nil
 }
 
 // extractBytesField extracts the first occurrence of a length-delimited

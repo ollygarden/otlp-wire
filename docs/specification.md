@@ -3,9 +3,15 @@
 ## Status and authority
 
 This document specifies the product boundary and compatibility contract of
-`go.olly.garden/otlp-wire` as of v0.0.4. It is the canonical reference for
-what the library is for, which behavior consumers may rely on, and what must
-remain true through a refactor.
+`go.olly.garden/otlp-wire` as of v0.0.4, plus one unreleased breaking change
+(E-2941, targeting v0.1.0) described in the "Resources and attributes"
+section below: `Resource()` on `ResourceMetrics`/`ResourceLogs`/`ResourceSpans`
+now returns the typed `Resource`, tolerates an absent Resource field, and
+merges repeated Resource occurrences; `ResourceLogs.StringAttribute` is
+removed. Update the version boundary in this line when that change is
+released. This document is otherwise the canonical reference for what the
+library is for, which behavior consumers may rely on, and what must remain
+true through a refactor.
 
 The other repository documents have narrower roles:
 
@@ -169,20 +175,104 @@ iterators, preventing corrupt input from being reported as a valid
 zero-data-point metric. Update this document's version boundary when that
 change is released.
 
+The unreleased E-2941 change narrows this operation-scoping for one accessor:
+`Resource()` must scan the complete container (not just up to the first
+Resource field) to find every occurrence to merge, so a malformed field after
+the last Resource occurrence is now reported as an error where it previously
+was not. See "Resources and attributes" below for the full contract.
+
 ### Resources and attributes
 
-`Resource()` returns the raw embedded Resource message without copying it.
-The current API reports an error when that field is absent or malformed.
+`ResourceMetrics.Resource()`, `ResourceLogs.Resource()`, and
+`ResourceSpans.Resource()` each return `(Resource, error)`: exactly one typed
+Resource per container, matching pdata's object model.
+
+`Resource` is declared as `[]byte` (`type Resource []byte`), so a returned
+value assigns to a `[]byte` variable, passes to a `[]byte` parameter, and
+appends to a `[][]byte` without conversion. That covers how callers use the
+method directly, and every consumer surveyed for E-2941 compiles unchanged.
+It is not general source compatibility, though: the *method signature* changed,
+so an interface declaring `Resource() ([]byte, error)` is no longer satisfied,
+and a method value cannot be assigned to a `func() ([]byte, error)` variable.
+Code doing either must be updated.
+
+**Absence is not an error (unreleased, E-2941, v0.1.0).** OTLP declares the
+Resource field optional (`ResourceSpans.resource`, `ResourceLogs.resource`,
+`ResourceMetrics.resource`: "If this field is not set then no resource info is
+known"), and pdata accepts such a container, reporting an empty Resource.
+`Resource()` returns `(nil, nil)` for an absent field, matching the existing
+convention for other optional fields in this library. A malformed *framing* of
+the Resource field — wrong wire type, or a length that overruns the container —
+still returns an error.
+
+Be precise about how far that error checking reaches. With a single occurrence,
+`Resource()` returns a view of the field's bytes without inspecting their
+contents, so a lone occurrence whose interior is corrupt is returned without an
+error and fails later, when a semantic accessor such as `StringAttribute` reads
+it. That is the same lightweight-view behavior the field had before v0.1.0. With
+two or more occurrences the contents of each are checked structurally before
+merging, for the correctness reason given below, so the identical corrupt bytes
+are rejected there. The asymmetry is deliberate: the library never promised to
+validate bytes a caller has not traversed, but it must not assemble a valid
+message out of invalid parts.
+
+**Repeated occurrences merge (unreleased, E-2941, v0.1.0).** Protobuf merges
+repeated occurrences of a singular message field, and pdata performs this
+merge; `Resource()` does too, rather than returning only the first occurrence.
+A single occurrence — what every real producer emits — returns a slice
+aliasing the container, with no allocation. Two or more occurrences are merged
+by concatenating their encoded bodies into one new buffer, which has been
+verified byte-equivalent to protobuf's field-by-field merge for singular
+message fields. This is the one allocating case in an otherwise zero-copy
+accessor; see the amended performance contract below.
+
+**Each occurrence must stand alone.** Before concatenating, every occurrence is
+checked to be a structurally well-formed protobuf message on its own. This is a
+correctness requirement, not a convenience: a Resource can be split across two
+occurrences so that neither half parses independently while their
+concatenation does. pdata parses each occurrence separately and rejects such a
+payload, so concatenating unchecked would let the wire path accept input the
+pdata fallback rejects — exactly the parity consumers running a wire fast path
+beside a pdata fallback depend on. The check is structural only (tags parse,
+values are contained, the walk ends exactly at the end); it does not
+semantically validate the Resource, consistent with the lightweight-view versus
+semantic-accessor split described above. It runs only on the multi-occurrence
+path, so the single-occurrence hot path is unaffected in both time and
+allocations.
+
+**Validation-scope change (unreleased, E-2941, v0.1.0).** Finding every
+Resource occurrence to merge correctly requires scanning the complete
+container instead of returning as soon as the first Resource field is found.
+Consequently, a malformed field located *after* the last Resource occurrence
+in the container is now reported as an error, where the previous
+first-match-and-return implementation never reached it. This is a narrow,
+intentional expansion of validation scope for this one accessor: other
+single-field extractors in this library (used for fields that do not merge)
+keep the shallow, first-match behavior described under "Parsing and protobuf
+behavior" above.
 
 `Resource.Attributes` and `AttributesSeq` expose KeyValues from one Resource
 message. `Resource.StringAttribute` parses one Resource and distinguishes a
 missing or non-string attribute from a present empty string with its `found`
-result.
+result. Because `Resource()` already performs the merge described above,
+`Resource.StringAttribute` sees every merged occurrence's attributes and
+naturally preserves pdata's first-value-wins behavior for duplicate keys
+without any merge-specific logic of its own.
 
-`ResourceLogs.StringAttribute` operates on a complete `ResourceLogs` message.
-It merges repeated singular Resource fields in wire order and preserves the
-first value for duplicate attribute keys, matching the pdata behavior required
-by log consumers. Later Resource occurrences are still validated.
+**`ResourceLogs.StringAttribute` is removed (unreleased, E-2941, v0.1.0,
+breaking).** It predated `Resource()` returning a merged, typed `Resource` and
+skipped a level (`ResourceLogs` straight to attribute) with no pdata
+analogue. Callers migrate by calling `Resource()` first:
+
+```go
+// before
+value, found, err := resourceLogs.StringAttribute("service.name")
+
+// after
+resource, err := resourceLogs.Resource()
+if err != nil { /* ... */ }
+value, found, err := resource.StringAttribute("service.name")
+```
 
 `KeyValue.Key` and `ValueRaw` are lightweight views of the first matching
 encoded field. `KeyValue.StringValue` is the semantic string accessor: it
@@ -244,7 +334,14 @@ is part of this library's purpose and compatibility surface.
 - Ordinary iterator opens have the documented small closure cost.
 - `DataPointsSeq`, `AttributesSeq`, and `LogRecordsSeq` remain zero-allocation
   on their per-element paths.
-- Accessors return aliased slices rather than copying payload data.
+- Accessors return aliased slices rather than copying payload data, with one
+  documented exception: `Resource()` aliases the input when a container holds
+  a single Resource occurrence (the case every real producer emits) and
+  allocates a concatenated buffer only when merging 2+ occurrences
+  (unreleased, E-2941, v0.1.0). See "Resources and attributes" above and
+  `BenchmarkResource_SingleOccurrence` /
+  `BenchmarkResource_MultipleOccurrences` in
+  [BENCHMARKS.md](BENCHMARKS.md).
 - Production code must not introduce pdata or generated-message unmarshaling.
 
 Exact timings are environment-specific, not API guarantees. Any performance
@@ -282,6 +379,7 @@ Past feature rollouts established the following sequence:
 | v0.0.2 | Span-level trace access (PR #2) | Adopt partial trace processing in detector services |
 | v0.0.3 | Metrics-depth traversal and zero-allocation variants (E-2608, PR #18) | Release the primitive first, then migrate metrics consumers such as Marigold with parity and production evidence |
 | v0.0.4 | Log traversal, severity and resource strings (E-2892, PR #22) | Release the primitive first, then use separate Bindweed, Mulch and Sage adoption issues (E-2900, E-2905, E-2906) |
+| v0.1.0 (unreleased) | Typed, absence-tolerant, merged `Resource()`; removes `ResourceLogs.StringAttribute` (E-2941) | Breaking: `Resource()` now returns `(Resource, error)` (direct calls stay compatible since `Resource` assigns to `[]byte`, but interfaces and method values typed on the old signature must be updated) and no longer errors on an absent Resource field; `rl.StringAttribute(k)` callers migrate to `rl.Resource()` then `res.StringAttribute(k)`. Release the primitive, then coordinate consumer releases per the acceptance gates below before broad upgrades |
 
 Future capabilities and refactors should follow the same staged model:
 

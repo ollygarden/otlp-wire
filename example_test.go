@@ -137,9 +137,11 @@ func ExampleMetric_DataPoints() {
 	// Output: request.duration ts=1000000000 attr=method
 }
 
-// ExampleResourceLogs_StringAttribute walks resource context and log records
-// without unmarshaling the OTLP request.
-func ExampleResourceLogs_StringAttribute() {
+// ExampleResourceLogs_Resource walks resource context and log records
+// without unmarshaling the OTLP request. It replaces the removed
+// ResourceLogs.StringAttribute: call Resource() to get the one, merged
+// Resource for this container, then StringAttribute on that Resource.
+func ExampleResourceLogs_Resource() {
 	logs := plog.NewLogs()
 	pdataResource := logs.ResourceLogs().AppendEmpty()
 	pdataResource.Resource().Attributes().PutStr("service.name", "checkout")
@@ -155,7 +157,12 @@ func ExampleResourceLogs_StringAttribute() {
 	request := otlpwire.ExportLogsServiceRequest(data)
 	resources, resourceErr := request.ResourceLogs()
 	for resourceLogs := range resources {
-		service, found, err := resourceLogs.StringAttribute("service.name")
+		resource, err := resourceLogs.Resource()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		service, found, err := resource.StringAttribute("service.name")
 		if err != nil {
 			fmt.Println(err)
 			return

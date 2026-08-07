@@ -1141,7 +1141,9 @@ func TestResourceMetrics_Resource_WrongWireType(t *testing.T) {
 }
 
 func TestResourceMetrics_Resource_Missing(t *testing.T) {
-	// Craft ResourceMetrics without Resource field (only ScopeMetrics)
+	// Craft ResourceMetrics without Resource field (only ScopeMetrics). OTLP
+	// declares Resource optional, so this is valid and Resource() reports it
+	// as absent rather than erroring.
 	buf := []byte{}
 
 	// Field 2 = ScopeMetrics (empty)
@@ -1149,9 +1151,9 @@ func TestResourceMetrics_Resource_Missing(t *testing.T) {
 	buf = protowire.AppendBytes(buf, []byte{})
 
 	rm := ResourceMetrics(buf)
-	_, err := rm.Resource()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	got, err := rm.Resource()
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestResourceLogs_Resource_WrongWireType(t *testing.T) {
@@ -1166,14 +1168,16 @@ func TestResourceLogs_Resource_WrongWireType(t *testing.T) {
 }
 
 func TestResourceLogs_Resource_Missing(t *testing.T) {
+	// OTLP declares Resource optional; absence is valid and reported as
+	// (nil, nil), not an error.
 	buf := []byte{}
 	buf = protowire.AppendTag(buf, 2, protowire.BytesType)
 	buf = protowire.AppendBytes(buf, []byte{})
 
 	rl := ResourceLogs(buf)
-	_, err := rl.Resource()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	got, err := rl.Resource()
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestResourceSpans_Resource_WrongWireType(t *testing.T) {
@@ -1188,14 +1192,16 @@ func TestResourceSpans_Resource_WrongWireType(t *testing.T) {
 }
 
 func TestResourceSpans_Resource_Missing(t *testing.T) {
+	// OTLP declares Resource optional; absence is valid and reported as
+	// (nil, nil), not an error.
 	buf := []byte{}
 	buf = protowire.AppendTag(buf, 2, protowire.BytesType)
 	buf = protowire.AppendBytes(buf, []byte{})
 
 	rs := ResourceSpans(buf)
-	_, err := rs.Resource()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	got, err := rs.Resource()
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 // ========== Benchmarks ==========

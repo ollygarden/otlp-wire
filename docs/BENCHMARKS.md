@@ -131,6 +131,114 @@ Speedup: 879x faster
 
 ---
 
+## Resource() absence, aliasing, and merge (E-2941)
+
+`Resource()` on `ResourceMetrics`/`ResourceLogs`/`ResourceSpans` changed in
+three ways: it returns `(nil, nil)` instead of an error for an absent
+Resource field, it merges repeated Resource occurrences instead of returning
+only the first, and it returns the typed `Resource` rather than `[]byte`.
+Merging requires scanning the complete container instead of returning as soon
+as the first Resource field is found, which is a small but real cost even in
+the common single-occurrence case; these benchmarks quantify that cost and
+confirm the hard performance gate that the single-occurrence path still
+allocates nothing.
+
+**Environment:** 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz, linux/amd64,
+Go 1.25.12. Compared with two checkouts on the same machine: this change
+(feature branch) and `upstream/main` at commit `8c0e9b4` (pre-E-2941).
+
+**Commands** (medians of 10 runs for the pair below, 5 for the scaling table):
+
+```bash
+go test -run '^$' -bench 'BenchmarkResource_(SingleOccurrence|MultipleOccurrences)$' -benchmem -count=10 ./...
+go test -run '^$' -bench 'BenchmarkResource_ScanScaling' -benchmem -count=5 ./...
+```
+
+The `upstream/main` side was measured in a detached worktree of `8c0e9b4`
+with the same fixtures ported verbatim, since the benchmarks themselves are
+new in this change.
+
+**Fixture:** a `ResourceMetrics` container built directly with `protowire`
+(not through pdata, since pdata's API cannot produce a container with 2+
+Resource occurrences) holding either one `service.name` Resource occurrence
+(single-occurrence case) or three occurrences with distinct keys
+(`service.name`, `deployment.environment`, `host.name`) for the
+multi-occurrence case. The pre-E-2941 checkout returns only the first
+occurrence regardless of how many are present, so its "multiple occurrences"
+number measures the same raw extraction cost on the same bytes, not a merge
+(it does not merge).
+
+| Benchmark | Revision | ns/op | B/op | allocs/op |
+|---|---|---:|---:|---:|
+| `BenchmarkResource_SingleOccurrence` | pre-E-2941 (`upstream/main`) | 6.72 | 0 | 0 |
+| `BenchmarkResource_SingleOccurrence` | this change | 17.6 | 0 | 0 |
+| `BenchmarkResource_MultipleOccurrences` | pre-E-2941 (`upstream/main`, returns 1st occurrence only) | 6.65 | 0 | 0 |
+| `BenchmarkResource_MultipleOccurrences` | this change (merges all occurrences) | ~205 (160–253) | 144 | 2 |
+
+Single-occurrence figures are medians of 10 runs and are stable to within
+about 0.7 ns. The multi-occurrence figure varies run to run because it
+allocates; the range observed across 10 runs is given rather than a single
+median, since quoting one number there would overstate the precision.
+
+### Scan cost scales with the container (`BenchmarkResource_ScanScaling`)
+
+The single-occurrence table above uses a container with one scope entry, which
+undersells the change. Merging requires scanning every top-level field, so the
+cost grows with the container's scope count where the previous
+first-match-and-return implementation was flat. Measured on the same machine
+with `-count=5`, one Resource followed by *n* 64-byte scope entries:
+
+| scope entries | pre-E-2941 | this change |
+|---:|---:|---:|
+| 1 | 6.8 ns | 17.4 ns |
+| 10 | 6.8 ns | 88.5 ns |
+| 50 | 6.8 ns | 412 ns |
+
+Findings:
+
+- **The hard performance gate holds:** the single-occurrence path — what
+  every real producer emits — remains zero-allocation after this change, at
+  every container size measured.
+- **This is a complexity change, not a constant-factor one.** The previous
+  implementation returned at the first Resource field, so its cost was
+  proportional to the number of fields preceding that field — O(1) only for a
+  Resource-first container like this fixture, which is the ordering real
+  producers emit but not one the wire format guarantees. This one is
+  O(number of top-level fields) unconditionally, roughly 8 ns per additional
+  scope entry on this machine.
+- Each skipped field is still cheap: `protowire.ConsumeFieldValue` on a
+  length-delimited field reads the length prefix and steps over the body
+  without descending into it, so the walk covers the container's tags and
+  never its payload. The growth is in the number of tags, not their size.
+- Scanning fully is what parity with pdata costs — pdata parses the whole
+  message too — and there is no way to prove a second occurrence is absent
+  without looking. The absolute numbers stay well under a microsecond for
+  realistic containers, but consumers calling `Resource()` once per container
+  on every message should be aware the cost now tracks container shape.
+- Merging 2+ occurrences allocates (144 B, 2 allocs in this fixture: one
+  slice growth for the second and later occurrences, one for the
+  concatenated buffer) where the pre-E-2941 code allocated nothing — because
+  it silently returned only the first occurrence instead of merging. This is
+  the documented, intentional exception to the zero-copy accessor contract;
+  see [DESIGN.md](DESIGN.md) and the "Resources and attributes" section of
+  [specification.md](specification.md).
+
+### Log severity classification (E-2892) — unaffected by E-2941
+
+`classifyWireLogSeverities` was updated to call the new `ResourceLogs.Resource()`
+once per resource and `Resource.StringAttribute` per key, replacing calls to
+the removed `ResourceLogs.StringAttribute` per key. Re-running
+`BenchmarkLogs_SeverityClassification_WireFormat` on the same machine (11th
+Gen Intel i7-11800H, linux/amd64, Go 1.25.12; command:
+`go test -run '^$' -bench 'BenchmarkLogs_SeverityClassification' -benchmem -count=5 ./...`)
+shows no meaningful change: pre-E-2941 and this change both measure
+approximately 80,000 ns/op, 488 B/op, 15 allocs/op (median of 5 runs on this
+machine; this machine's absolute numbers differ from the Apple M4 figures
+recorded for this benchmark above since they are different hardware, but the
+before/after comparison on identical hardware is what matters here).
+
+---
+
 ## Implementation Details
 
 ### Counting Performance

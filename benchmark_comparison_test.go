@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // ========== Metrics: Count Comparison ==========
@@ -349,8 +350,12 @@ func classifyWireLogSeverities(request ExportLogsServiceRequest) (logSeverityCla
 	var result logSeverityClassification
 	resources, resourceErr := request.ResourceLogs()
 	for resource := range resources {
+		res, err := resource.Resource()
+		if err != nil {
+			return logSeverityClassification{}, err
+		}
 		for _, key := range []string{"service.name", "deployment.environment"} {
-			value, found, err := resource.StringAttribute(key)
+			value, found, err := res.StringAttribute(key)
 			if err != nil {
 				return logSeverityClassification{}, err
 			}
@@ -723,6 +728,37 @@ func BenchmarkMetrics_ResourceExtraction_Unmarshal(b *testing.B) {
 	}
 }
 
+// BenchmarkResource_SingleOccurrence covers the common single-occurrence
+// container. The performance gate is that this path stays zero-allocation.
+func BenchmarkResource_SingleOccurrence(b *testing.B) {
+	container := containerWithResource(resourceWithStringAttr("service.name", "checkout"))
+	rm := ResourceMetrics(container)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = rm.Resource()
+	}
+}
+
+// BenchmarkResource_MultipleOccurrences is the paired benchmark for the
+// documented exception: 2+ Resource occurrences require concatenating the
+// encoded bodies into a new buffer, so this path allocates.
+func BenchmarkResource_MultipleOccurrences(b *testing.B) {
+	container := containerWithResources(
+		resourceWithStringAttr("service.name", "checkout"),
+		resourceWithStringAttr("deployment.environment", "prod"),
+		resourceWithStringAttr("host.name", "host-1"),
+	)
+	rm := ResourceMetrics(container)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = rm.Resource()
+	}
+}
+
 // ========== Metrics: Deep Iteration (E-2608, marigold workload) ==========
 
 // createScrapeShapedMetrics mirrors the traffic shape from E-2601: one
@@ -984,5 +1020,39 @@ func BenchmarkMetrics_DeepIteration_Unmarshal(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		deepIteratePdata(b, unmarshaler, bytes)
+	}
+}
+
+// containerWithScopes builds a resource container holding one Resource
+// followed by n scope entries, so the cost of locating the Resource can be
+// measured against the container's top-level field count.
+func containerWithScopes(n int) []byte {
+	res := resourceWithStringAttr("service.name", "checkout")
+	out := protowire.AppendTag(nil, 1, protowire.BytesType)
+	out = protowire.AppendVarint(out, uint64(len(res)))
+	out = append(out, res...)
+
+	scope := make([]byte, 64)
+	for i := 0; i < n; i++ {
+		out = protowire.AppendTag(out, 2, protowire.BytesType)
+		out = protowire.AppendVarint(out, uint64(len(scope)))
+		out = append(out, scope...)
+	}
+	return out
+}
+
+// BenchmarkResource_ScanScaling pins the complexity of Resource(): merging
+// requires scanning every top-level field, so cost grows with the scope count
+// instead of staying constant. Backs the scaling table in docs/BENCHMARKS.md.
+func BenchmarkResource_ScanScaling(b *testing.B) {
+	for _, scopes := range []int{1, 10, 50} {
+		b.Run(fmt.Sprintf("scopes=%d", scopes), func(b *testing.B) {
+			rm := ResourceMetrics(containerWithScopes(scopes))
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, _ = rm.Resource()
+			}
+		})
 	}
 }

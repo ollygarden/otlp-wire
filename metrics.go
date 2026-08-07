@@ -74,9 +74,16 @@ func (r ResourceMetrics) DataPointCount() (int, error) {
 	return countInResourceMetrics([]byte(r))
 }
 
-// Resource returns the raw Resource message bytes.
-func (r ResourceMetrics) Resource() ([]byte, error) {
-	return extractResourceMessage([]byte(r))
+// Resource returns the Resource message for this ResourceMetrics. It returns
+// (nil, nil) when the field is absent, aliases the input for the single
+// occurrence every real producer emits, and merges 2+ occurrences into a new
+// buffer. See extractResourceMessage for the full contract.
+func (r ResourceMetrics) Resource() (Resource, error) {
+	raw, err := extractResourceMessage([]byte(r))
+	if err != nil {
+		return nil, err
+	}
+	return Resource(raw), nil
 }
 
 // WriteTo writes the ResourceMetrics as a valid ExportMetricsServiceRequest to w.
