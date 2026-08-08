@@ -148,16 +148,22 @@ makes that impossible by construction.
 
 Threading the value out of the walk costs a measured 2–3% on the
 severity-classification path with allocations unchanged
-([BENCHMARKS.md](BENCHMARKS.md)), and a consumer reading both severity fields
-pays two walks, because each accessor runs the walk once. No combined accessor
-exists. The walk already produces both values, so exposing the pair would need
-no new machinery — but per the flattened-convenience rule in E-2940 a
-convenience needs a measured hot path, and the concrete trigger is sage
-adopting `SeverityText` and reading both fields per record.
+([BENCHMARKS.md](BENCHMARKS.md)).
+
+`Severity` returns both fields from one walk. Each single-field accessor runs
+the walk once, so a consumer reading both through them pays for two — a
+measured ~1.9x the combined call over the same records. This is the
+flattened convenience E-2940 permits rather than one it forbids: that rule asks
+a convenience to name a measured hot path, and E-2954 measured one — sage's
+per-record scan loop reads both fields. Exposing the pair added no parsing
+machinery, since the walk already produced both values, and all three accessors
+share it, so none of them can disagree with another about whether a record is
+valid.
 
 Severity *classification* stays out of the library. Bands and number/text
 precedence are consumer policy, and nothing in the consumer audit argues
-otherwise.
+otherwise. `Severity` returns the raw wire fields; deciding which one wins when
+they disagree is the consumer's.
 
 Resource context comes from `ResourceLogs.Resource()`, which merges every
 Resource occurrence for this container (see "Resource extraction" below) so

@@ -577,13 +577,13 @@ paired median (between +3% and +6.5% across runs) and the sign, which held in
 one indirect call per element; the clamp is the guarantee a caller's `append`
 cannot reach the neighbouring entry, which the hand-rolled walk lacks.
 
-## `LogRecord.SeverityText` (E-2944)
+## LogRecord severity accessors (E-2944, E-2957)
 
-`SeverityText` reads `severity_text` out of the same schema-aware walk
-`SeverityNumber` already used, rather than getting its own extractor. Two
-measurements matter: what that shared walk costs the existing `SeverityNumber`
-hot path, and how the new accessor compares to the shallow walk sage
-hand-rolls today.
+`SeverityNumber`, `SeverityText` and `Severity` all read from one schema-aware
+walk of the whole LogRecord rather than getting their own extractors. Two
+measurements matter: what threading `severity_text` out of that walk costs the
+`SeverityNumber` hot path, and what the combined accessor saves a consumer
+reading both fields.
 
 **Environment:** 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz, linux/amd64,
 Go 1.25.12, developer desktop. Both comparisons alternate single-arm
@@ -629,57 +629,51 @@ delta this size on this machine — it understated the median by roughly a
 percentage point against both 15-round sessions. Use 15 or more.
 
 This is the price of one walk instead of two implementations, and it is
-deliberate: see [DESIGN.md](DESIGN.md) for why drift between the two severity
+deliberate: see [DESIGN.md](DESIGN.md) for why drift between the severity
 accessors is the failure being bought out.
 
-### Against sage's hand-rolled walk
+### Reading both fields: `Severity` against the single-field pair
 
 **Fixture:** `createBenchLogs` — 5 resources × 100 records, each with a body,
 a timestamp, two attributes, a severity number and `severity_text`.
 
-`logRecordSeverityTextHandRolled` is sage's `internal/event/wire.go` walk
-copied verbatim so the comparison reproduces from this repository alone. The
-arms are **not** equivalent work: sage's stops at field 3 and steps over the
-body and attributes without descending, then materializes a `string`;
-`SeverityText` validates every known LogRecord field — including parsing the
-body's `AnyValue` and every attribute `KeyValue` — and returns a view.
+Three arms of one binary, alternated. `SeverityText` is the single-field
+baseline — one walk per record — and `SeverityNumberAndText` calls both
+single-field accessors, which runs that walk twice:
 
 ```bash
 go test -c -o /tmp/otlpwire.test .
-for round in $(seq 1 9); do
-  for arm in _HandRolled ''; do
+for round in $(seq 1 15); do
+  for arm in SeverityText SeverityNumberAndText Severity; do
     /tmp/otlpwire.test -test.run '^$' -test.benchmem -test.benchtime=3000x \
-      -test.bench "^BenchmarkLogRecord_SeverityText${arm}\$"
+      -test.bench "^BenchmarkLogRecord_${arm}\$"
   done
 done
 ```
 
-| Benchmark | ns/op (median of 9) | B/op | allocs/op |
-|---|---:|---:|---:|
-| `BenchmarkLogRecord_SeverityText_HandRolled` | 40,215 | 2,368 | 514 |
-| `BenchmarkLogRecord_SeverityText` | 69,185 | 368 | 14 |
+| Benchmark | fields / walks | ns/op (median of 15) | B/op | allocs/op |
+|---|---|---:|---:|---:|
+| `BenchmarkLogRecord_SeverityText` | one / one | 89,783 | 368 | 14 |
+| `BenchmarkLogRecord_SeverityNumberAndText` | two / two | 170,990 | 368 | 14 |
+| `BenchmarkLogRecord_Severity` | two / one | 89,669 | 368 | 14 |
 
-**About 72% slower and 500 allocations cheaper per batch**, slower in 9 of 9
-rounds. Both directions are real and neither is noise:
+**Median paired saving 48% against the two-accessor pair, cheaper in 15 of 15
+rounds**, allocations unchanged. Put the other way round, reading both fields
+through the single-field accessors costs roughly **double**: the pair is 92%
+more expensive at the median, per-round deltas spanning +76% to +110%. An
+earlier 11-round session on the same machine measured a 44% saving, so take
+the effect as "about half the cost, give or take a few points" rather than
+either figure exactly.
 
-- The CPU cost is the schema-aware validation. It is what makes `SeverityText`
-  and `SeverityNumber` accept and reject identical bytes; the hand-rolled walk
-  cannot make that promise, because it never looks at the body or attributes.
-- The allocation saving is the returned view. sage's walk allocates one string
-  per record — 500 in this fixture — where the accessor aliases the request
-  buffer with a clamped capacity.
+The combined arm lands on the single-field one — median +1.1%, per-round
+deltas from −7.4% to +29.0%, slower in only 9 of 15 rounds, so the sign does
+not hold and the two are indistinguishable here. That is the property being
+claimed: reading both fields costs one walk, not two.
 
-A consumer on a GC-sensitive ingest path is trading CPU for allocations here,
-not simply losing. A consumer that wants the cheap shallow read and does not
-need `SeverityNumber` parity is better served by its own walk, and should say
-so on the migration issue rather than adopting this accessor by default.
-
-Reading both severity fields runs the walk twice. No combined accessor exists;
-the trigger for adding one is sage adopting `SeverityText` and reading both
-fields per record.
-
-Drop the hand-rolled arm and this subsection once sage moves to
-`LogRecord.SeverityText`.
+The 14 allocations are the resource and scope iterator openings, not the
+severity read; every arm pays the same. A consumer that wants a
+`string` rather than a view pays for that conversion at its own call site,
+which is where the allocation belongs.
 
 ## Span field accessors (E-2945)
 

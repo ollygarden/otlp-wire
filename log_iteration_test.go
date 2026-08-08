@@ -104,10 +104,7 @@ func TestLogRecordSeverityText(t *testing.T) {
 // pdata's setter cannot emit: proto3 drops an empty severity_text on marshal,
 // and the API has no way to repeat a singular field.
 func TestLogRecordSeverityText_MatchesPdata(t *testing.T) {
-	severityText := func(value string) []byte {
-		out := protowire.AppendTag(nil, 3, protowire.BytesType)
-		return protowire.AppendString(out, value)
-	}
+	severityText := severityTextField
 
 	tests := []struct {
 		name     string
@@ -178,6 +175,109 @@ func TestLogRecordSeverityText_CompleteMessageSemantics(t *testing.T) {
 	require.Error(t, err, "every severity_text occurrence must use the bytes wire type")
 }
 
+// TestLogRecordSeverity_MatchesPdataAndSingleAccessors pins the combined
+// accessor against pdata and against the pair of single-field accessors it
+// replaces, over every presence combination of the two fields. The records are
+// hand-built because pdata's setters cannot emit an empty severity_text or a
+// repeated singular field.
+func TestLogRecordSeverity_MatchesPdataAndSingleAccessors(t *testing.T) {
+	tests := []struct {
+		name           string
+		record         []byte
+		expectedNumber int32
+		expectedText   []byte
+	}{
+		{
+			name:   "neither field present",
+			record: unknownScalarFields(),
+		},
+		{
+			name:           "number only",
+			record:         severityNumberField(plog.SeverityNumberWarn),
+			expectedNumber: 13,
+		},
+		{
+			name:         "text only",
+			record:       severityTextField("WARN"),
+			expectedText: []byte("WARN"),
+		},
+		{
+			name:           "both present",
+			record:         append(severityNumberField(plog.SeverityNumberError), severityTextField("ERROR")...),
+			expectedNumber: 17,
+			expectedText:   []byte("ERROR"),
+		},
+		{
+			name:           "text present but empty",
+			record:         append(severityNumberField(plog.SeverityNumberInfo), severityTextField("")...),
+			expectedNumber: 9,
+			expectedText:   []byte{},
+		},
+		{
+			name:           "repeated number resolves to the last occurrence",
+			record:         slices.Concat(severityNumberField(plog.SeverityNumberDebug), severityTextField("KEPT"), severityNumberField(plog.SeverityNumberFatal)),
+			expectedNumber: 21,
+			expectedText:   []byte("KEPT"),
+		},
+		{
+			name:           "repeated text resolves to the last occurrence",
+			record:         slices.Concat(severityTextField("FIRST"), severityNumberField(plog.SeverityNumberInfo), severityTextField("SECOND")),
+			expectedNumber: 9,
+			expectedText:   []byte("SECOND"),
+		},
+		{
+			name:           "unknown fields around both",
+			record:         slices.Concat(unknownScalarFields(), severityTextField("TRACE"), unknownScalarFields(), severityNumberField(plog.SeverityNumberTrace), unknownScalarFields()),
+			expectedNumber: 1,
+			expectedText:   []byte("TRACE"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := LogRecord(tt.record)
+
+			number, text, err := record.Severity()
+			require.NoError(t, err)
+			require.Equal(t, tt.expectedNumber, number)
+			// require.Equal distinguishes a nil []byte from an empty one,
+			// which is the absent-versus-present-empty contract pdata cannot
+			// express. The expected values rely on that.
+			require.Equal(t, tt.expectedText, text)
+
+			singleNumber, err := record.SeverityNumber()
+			require.NoError(t, err)
+			singleText, err := record.SeverityText()
+			require.NoError(t, err)
+			require.Equal(t, singleNumber, number, "the combined accessor must return what SeverityNumber returns")
+			require.Equal(t, singleText, text, "the combined accessor must return what SeverityText returns")
+
+			pdataNumber, pdataText := pdataSeverity(t, tt.record)
+			require.Equal(t, tt.expectedNumber, pdataNumber)
+			require.Equal(t, string(tt.expectedText), pdataText)
+		})
+	}
+}
+
+// TestLogRecordSeverity_CompleteMessageSemantics pins that the combined
+// accessor inherits the whole-record walk rather than stopping once both
+// fields are in hand, so corruption located after them is still reported.
+func TestLogRecordSeverity_CompleteMessageSemantics(t *testing.T) {
+	var record LogRecord
+	record = append(record, severityNumberField(plog.SeverityNumberInfo)...)
+	record = append(record, severityTextField("INFO")...)
+	record = appendUnknownGroup(record, 90)
+
+	number, text, err := record.Severity()
+	require.NoError(t, err)
+	require.Equal(t, int32(plog.SeverityNumberInfo), number)
+	require.Equal(t, []byte("INFO"), text)
+
+	trailingMalformed := append(append(LogRecord(nil), record...), 0x80)
+	_, _, err = trailingMalformed.Severity()
+	require.Error(t, err, "a valid early severity must not hide malformed trailing data")
+}
+
 // TestLogRecordSeverity_PdataDivergence pins the inputs where the shared
 // LogRecord walk and pdata disagree about validity. They are the exception to
 // the parity the rest of the suite asserts, they are all reachable only on
@@ -228,12 +328,15 @@ func TestLogRecordSeverity_PdataDivergence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, textErr := tt.record.SeverityText()
 			_, numberErr := tt.record.SeverityNumber()
+			_, _, combinedErr := tt.record.Severity()
 			_, pdataErr := (&plog.ProtoUnmarshaler{}).UnmarshalLogs(exportLogsWithRecord(tt.record))
 
-			// The divergence is wire-versus-pdata. The two accessors still
+			// The divergence is wire-versus-pdata. The three accessors still
 			// agree with each other, which is the property that matters.
 			require.Equal(t, textErr == nil, numberErr == nil,
-				"severity accessors must agree even where pdata disagrees with both")
+				"severity accessors must agree even where pdata disagrees with all of them")
+			require.Equal(t, textErr == nil, combinedErr == nil,
+				"severity accessors must agree even where pdata disagrees with all of them")
 
 			if tt.wireRejects {
 				require.Error(t, textErr, "wire path must reject")
@@ -246,9 +349,9 @@ func TestLogRecordSeverity_PdataDivergence(t *testing.T) {
 	}
 }
 
-// TestLogRecordSeverity_MalformedParity keeps the two severity accessors from
-// drifting apart: every malformed record fails both, and pdata rejects the
-// same bytes. It is the guard for the accessor-divergence risk in
+// TestLogRecordSeverity_MalformedParity keeps the three severity accessors
+// from drifting apart: every malformed record fails all of them, and pdata
+// rejects the same bytes. It is the guard for the accessor-divergence risk in
 // operations.md, so it covers the whole known LogRecord schema rather than
 // only the two severity fields.
 func TestLogRecordSeverity_MalformedParity(t *testing.T) {
@@ -271,36 +374,65 @@ func TestLogRecordSeverity_MalformedParity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, textErr := tt.record.SeverityText()
 			_, numberErr := tt.record.SeverityNumber()
+			_, _, combinedErr := tt.record.Severity()
 			_, pdataErr := (&plog.ProtoUnmarshaler{}).UnmarshalLogs(exportLogsWithRecord(tt.record))
 			require.Error(t, textErr)
 			require.Error(t, numberErr)
+			require.Error(t, combinedErr)
 			require.Error(t, pdataErr)
 		})
 	}
 }
 
-// TestLogRecordSeverityText_ViewAndAllocationContract pins what the accessor
-// promises beyond its value: the result aliases the caller's buffer with a
-// clamped capacity, and reading it allocates nothing.
-func TestLogRecordSeverityText_ViewAndAllocationContract(t *testing.T) {
-	logs := plog.NewLogs()
-	logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().SetSeverityText("INFO")
-	record := onlyLogRecord(t, marshalLogs(t, logs))
+// TestLogRecordSeverity_ViewAndAllocationContract pins what the text-returning
+// accessors promise beyond their value: the result aliases the caller's buffer
+// with a clamped capacity, and reading it allocates nothing.
+//
+// The record is hand-built with event_name after severity_text. protowire
+// returns a slice whose capacity runs to the end of the record, so the clamp
+// is what stops a caller's append from rewriting the field that follows — and
+// only a neighbour on that side can show it. A pdata-marshalled fixture cannot:
+// pdata writes fields in descending order, which leaves severity_text last and
+// makes the capacity assertion pass with or without the clamp.
+func TestLogRecordSeverity_ViewAndAllocationContract(t *testing.T) {
+	record := LogRecord(slices.Concat(
+		severityNumberField(plog.SeverityNumberInfo),
+		severityTextField("INFO"),
+		eventNameField("checkout.completed"),
+	))
+	untouched := slices.Clone([]byte(record))
 
 	text, err := record.SeverityText()
 	require.NoError(t, err)
+	number, combinedText, err := record.Severity()
+	require.NoError(t, err)
+	require.Equal(t, int32(plog.SeverityNumberInfo), number)
 	require.Equal(t, len(text), cap(text), "capacity must be clamped so a caller's append reallocates")
+	require.Equal(t, len(combinedText), cap(combinedText), "capacity must be clamped so a caller's append reallocates")
+
+	require.Equal(t, "INFOoverwritten", string(append(text, "overwritten"...)))
+	require.Equal(t, "INFOoverwritten", string(append(combinedText, "overwritten"...)))
+	require.Equal(t, untouched, []byte(record), "appending to the view must not reach the field that follows it")
 
 	// A copy would keep the old byte.
 	index := bytes.Index(record, []byte("INFO"))
 	require.GreaterOrEqual(t, index, 0)
 	record[index] = 'i'
 	require.Equal(t, []byte("iNFO"), text)
+	require.Equal(t, []byte("iNFO"), combinedText)
 
 	allocations := testing.AllocsPerRun(100, func() {
 		got, err := record.SeverityText()
 		if err != nil || len(got) == 0 {
 			t.Fatal("unexpected severity text result")
+		}
+	})
+	require.Zero(t, allocations)
+
+	allocations = testing.AllocsPerRun(100, func() {
+		number, got, err := record.Severity()
+		if err != nil || number != int32(plog.SeverityNumberInfo) || len(got) == 0 {
+			t.Fatal("unexpected severity result")
 		}
 	})
 	require.Zero(t, allocations)
@@ -321,11 +453,28 @@ func severityNumberField(severity plog.SeverityNumber) []byte {
 	return protowire.AppendVarint(out, uint64(severity))
 }
 
+func severityTextField(value string) []byte {
+	out := protowire.AppendTag(nil, 3, protowire.BytesType)
+	return protowire.AppendString(out, value)
+}
+
+func eventNameField(value string) []byte {
+	out := protowire.AppendTag(nil, 12, protowire.BytesType)
+	return protowire.AppendString(out, value)
+}
+
 func pdataSeverityText(t *testing.T, record []byte) string {
+	t.Helper()
+	_, text := pdataSeverity(t, record)
+	return text
+}
+
+func pdataSeverity(t *testing.T, record []byte) (int32, string) {
 	t.Helper()
 	logs, err := (&plog.ProtoUnmarshaler{}).UnmarshalLogs(exportLogsWithRecord(record))
 	require.NoError(t, err)
-	return logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).SeverityText()
+	logRecord := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	return int32(logRecord.SeverityNumber()), logRecord.SeverityText()
 }
 
 func TestLogTraversalAndResourceAttributes(t *testing.T) {

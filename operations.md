@@ -48,19 +48,27 @@ note under "Telemetry inventory" below.
 
 ### Diagnosing the LogRecord severity accessors
 
-`SeverityNumber` and `SeverityText` share one schema-aware walk of the whole
-LogRecord, so they can never disagree about whether a record is valid. Two
-consequences when reading a consumer's CPU profile:
+`SeverityNumber`, `SeverityText` and `Severity` share one schema-aware walk of
+the whole LogRecord, so they can never disagree about whether a record is
+valid. Two consequences when reading a consumer's CPU profile:
 
-- **Each call walks the record once.** A consumer reading both fields pays two
-  walks. A severity path showing roughly double the expected parse cost is
-  usually this, not a regression.
+- **Each call walks the record once.** A severity path showing roughly double
+  the expected parse cost is usually a consumer calling `SeverityNumber` and
+  `SeverityText` on the same record, not a regression — that pair costs a
+  measured ~1.9x what `Severity` costs, which returns both from one walk.
+  Confirm it
+  from the call site rather than the profile shape: both arrangements attribute
+  their time to the same function, so only the call count separates them. A
+  consumer that guards its `severity_text` read behind the number pays the same
+  either way once it uses `Severity`, so a sparse-missing-severity shape and an
+  every-record shape converge on the same cost.
 - **The walk descends into the body and every attribute.** Cost tracks record
   contents, not just field count, unlike the shallow field-scan accessors. A
   consumer whose records carry large bodies or many attributes pays more per
   severity read than one whose records are bare, even at identical record
-  counts. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the measured comparison
-  against a shallow hand-rolled walk.
+  counts. The published benchmarks all use one record shape, so they size the
+  per-record cost but do not show how it scales with body and attribute
+  volume; a consumer suspecting that scaling should measure its own payloads.
 
 **Known divergences from pdata.** These matter only to consumers that pair the
 wire path with a pdata fallback and expect the two to agree on validity. All
