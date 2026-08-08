@@ -268,10 +268,10 @@ name and version; the baseline unmarshals the same bytes with
 
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
-| `BenchmarkScope_NameVersion_WireFormat` | 221 | 72 | 4 |
-| `BenchmarkScope_NameVersion_Unmarshal` | 501 | 360 | 10 |
-| `BenchmarkScope_SingleOccurrence` (accessor alone) | 11.2 | 0 | 0 |
-| `BenchmarkScope_MultipleOccurrences` (3 occurrences, merges) | 187 | 112 | 2 |
+| `BenchmarkScope_NameVersion_WireFormat` | 194 | 72 | 4 |
+| `BenchmarkScope_NameVersion_Unmarshal` | 441 | 360 | 10 |
+| `BenchmarkScope_SingleOccurrence` (accessor alone) | 9.5 | 0 | 0 |
+| `BenchmarkScope_MultipleOccurrences` (3 occurrences, merges) | 141 | 112 | 2 |
 
 The four allocations on the wire side are the two closure-based iterators
 being opened, not `Scope()` — the accessor itself is zero-allocation, as the
@@ -298,15 +298,15 @@ of 5 runs.
 
 | records | `ScopeLogs.Scope()` | `ScopeLogs.SchemaUrl()` |
 |---:|---:|---:|
-| 1 | 34.4 ns | 30.4 ns |
-| 100 | 1106 ns | 1021 ns |
-| 1000 | 10636 ns | 9054 ns |
+| 1 | 26.3 ns | 26.2 ns |
+| 100 | 847 ns | 766 ns |
+| 1000 | 8146 ns | 7545 ns |
 
 Both remain 0 B/op, 0 allocs/op at every size.
 
 Findings:
 
-- **Roughly 10 ns per skipped record**, allocation-free. A consumer that reads
+- **Roughly 8 ns per skipped record**, allocation-free. A consumer that reads
   the scope and then iterates the records pays this as a constant factor on a
   walk it was already doing.
 - **A consumer that reads only the scope and stops early pays the most.**
@@ -322,19 +322,34 @@ Findings:
 ### `Metric.Name` — first-match to last-value-wins
 
 **Fixture:** the E-2608 scrape shape (one resource, one scope, 4800 metrics
-with one datapoint each), iterating every metric and reading its name.
-Medians of 6 runs.
+with one datapoint each), iterating every metric and reading its name. The two
+revisions differ only in `Metric.Name`'s body; everything else, including the
+capacity clamp in `forEachRepeatedField`, is identical. Measured by
+alternating the two builds (two rounds, `-count=6` each) rather than running
+one after the other, because a single sequential pair on this machine drifts
+enough to understate the gap.
 
-| Revision | ns/op | B/op | allocs/op |
+| Revision | ns/op (round 1, round 2) | B/op | allocs/op |
 |---|---:|---:|---:|
-| first-match (previous) | 118,496 | 112 | 6 |
-| last-value-wins (this change) | 121,909 | 112 | 6 |
+| first-match (previous) | 116,093 / 115,150 | 112 | 6 |
+| last-value-wins (this change) | 129,147 / 130,234 | 112 | 6 |
 
-About 3% slower across 4800 metrics — roughly 0.7 ns more per metric — with
-allocations unchanged. A `Metric`'s top-level fields are its name,
-description, unit and one oneof body, so the added scan skips a handful of
-tags and never descends into the datapoints. The correctness reason for the
-change is in [DESIGN.md](DESIGN.md); this measures what it cost.
+About **12% slower** across 4800 metrics — roughly 2.9 ns more per metric —
+with allocations unchanged. The observed ranges do not overlap, so the gap is
+real rather than noise.
+
+The cost is bounded and does not scale with payload size: a `Metric`'s
+top-level fields are its name, description, unit, one oneof body and optional
+metadata, and `protowire.ConsumeFieldValue` on the length-delimited body reads
+its length prefix and steps over it without descending into the datapoints.
+What the scan buys is pdata parity on a repeated `name`; what it costs is the
+early return. A consumer reading names across millions of metrics per scrape
+should weigh that 12% deliberately — it is the largest single regression in
+this change. The correctness reason is in [DESIGN.md](DESIGN.md).
+
+An earlier revision of this section reported ~3% from a non-interleaved
+measurement taken while the machine was under other load. The figures above
+supersede it.
 
 ### Gates unchanged
 
