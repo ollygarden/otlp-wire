@@ -133,6 +133,28 @@ func (m Metric) Name() ([]byte, error) {
 	return extractLastBytesField([]byte(m), 1)
 }
 
+// Metadata returns an iterator over the Metric's metadata KeyValues (field
+// 12). The returned function should be called after iteration to check for
+// errors.
+//
+// metadata is a repeated field: every occurrence is yielded in wire order,
+// duplicate keys included, matching pdata.
+func (m Metric) Metadata() (iter.Seq[KeyValue], func() error) {
+	return repeatedFieldSeq[KeyValue]([]byte(m), 12)
+}
+
+// MetadataSeq is a zero-allocation alternative to Metadata. It has the shape
+// of an iter.Seq2[KeyValue, error] and is meant to be ranged over directly:
+//
+//	for kv, err := range m.MetadataSeq {
+//		if err != nil { ... }
+//	}
+//
+// On a parse error it yields a nil KeyValue with a non-nil error and stops.
+func (m Metric) MetadataSeq(yield func(KeyValue, error) bool) {
+	keyValueSeq([]byte(m), 12, yield)
+}
+
 // DataPoints returns an iterator over datapoints in this Metric, descending
 // whichever oneof body is present (gauge 5, sum 7, histogram 9,
 // exponential_histogram 10, summary 11). Each body holds its datapoints in

@@ -1,6 +1,7 @@
 package otlpwire
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -766,6 +767,18 @@ func BenchmarkResource_MultipleOccurrences(b *testing.B) {
 // createScrapeShapedMetrics mirrors the traffic shape from E-2601: one
 // resource, one scope, thousands of metrics with a single datapoint each.
 func createScrapeShapedMetrics() pmetric.Metrics {
+	return createScrapeShapedMetrics2(false)
+}
+
+// createScrapeShapedMetricsWithMetadata is the same shape built for the
+// metadata arms: it attaches the three metadata entries a Prometheus receiver
+// sets on every metric, and omits the datapoint attributes, which those arms
+// never read and which would otherwise dominate the per-metric skip cost.
+func createScrapeShapedMetricsWithMetadata() pmetric.Metrics {
+	return createScrapeShapedMetrics2(true)
+}
+
+func createScrapeShapedMetrics2(forMetadataWalk bool) pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	rm := metrics.ResourceMetrics().AppendEmpty()
 	rm.Resource().Attributes().PutStr("service.name", "scraped-service")
@@ -776,6 +789,12 @@ func createScrapeShapedMetrics() pmetric.Metrics {
 	for i := 0; i < 4800; i++ {
 		metric := sm.Metrics().AppendEmpty()
 		metric.SetName(fmt.Sprintf("process_metric_%d_total", i))
+		if forMetadataWalk {
+			metric.SetUnit("1")
+			metric.Metadata().PutStr("prometheus.type", "counter")
+			metric.Metadata().PutStr("prometheus.help", "total processed items")
+			metric.Metadata().PutStr("otel.scope.name", "prometheus-receiver")
+		}
 		var dp pmetric.NumberDataPoint
 		if i%2 == 0 {
 			dp = metric.SetEmptyGauge().DataPoints().AppendEmpty()
@@ -787,10 +806,12 @@ func createScrapeShapedMetrics() pmetric.Metrics {
 		}
 		dp.SetDoubleValue(float64(i))
 		dp.SetTimestamp(1000000000)
-		dp.Attributes().PutStr("job", "node-exporter")
-		dp.Attributes().PutStr("instance", fmt.Sprintf("10.0.0.%d:9100", i%250))
-		dp.Attributes().PutStr("le", "0.5")
-		dp.Attributes().PutStr("quantile", "0.99")
+		if !forMetadataWalk {
+			dp.Attributes().PutStr("job", "node-exporter")
+			dp.Attributes().PutStr("instance", fmt.Sprintf("10.0.0.%d:9100", i%250))
+			dp.Attributes().PutStr("le", "0.5")
+			dp.Attributes().PutStr("quantile", "0.99")
+		}
 	}
 	return metrics
 }
@@ -1255,5 +1276,134 @@ func BenchmarkMetric_Name(b *testing.B) {
 		if err := resErr(); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// ========== Metric.Metadata ==========
+
+// benchMetadataAttribute mirrors what a cardinality consumer keeps per
+// attribute: aliased key and encoded-AnyValue views.
+type benchMetadataAttribute struct{ key, value []byte }
+
+// forEachBytesFieldHandRolled is the field-12 walk marigold hand-rolls in
+// internal/detector/wire.go, copied verbatim as the "before" arm so the
+// comparison reproduces from this repository alone. Drop this arm and its
+// docs/BENCHMARKS.md section once marigold moves to Metric.Metadata.
+func forEachBytesFieldHandRolled(data []byte, want protowire.Number, fn func([]byte) error) error {
+	for len(data) > 0 {
+		field, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return errors.New("malformed protobuf tag")
+		}
+		data = data[n:]
+		if field == want {
+			if typ != protowire.BytesType {
+				return errors.New("wrong wire type for bytes field")
+			}
+			value, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return errors.New("malformed protobuf bytes field")
+			}
+			if err := fn(value); err != nil {
+				return err
+			}
+			data = data[n:]
+			continue
+		}
+		n = protowire.ConsumeFieldValue(field, typ, data)
+		if n < 0 {
+			return errors.New("malformed protobuf field")
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+func benchMetadataPayload(b *testing.B) []byte {
+	b.Helper()
+	marshaler := &pmetric.ProtoMarshaler{}
+	payload, err := marshaler.MarshalMetrics(createScrapeShapedMetricsWithMetadata())
+	require.NoError(b, err)
+	return payload
+}
+
+// forEachBenchMetric walks down to every Metric so the arms differ only in how
+// they read metadata. Keep the arms as separate functions: dispatching through
+// a func value defeats inlining and changes what is measured.
+func forEachBenchMetric(b *testing.B, payload []byte, fn func(Metric)) {
+	resources, resErr := ExportMetricsServiceRequest(payload).ResourceMetrics()
+	for rm := range resources {
+		scopes, scopeErr := rm.ScopeMetrics()
+		for sm := range scopes {
+			ms, mErr := sm.Metrics()
+			for m := range ms {
+				fn(m)
+			}
+			if err := mErr(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := scopeErr(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := resErr(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkMetric_Metadata_HandRolled(b *testing.B) {
+	payload := benchMetadataPayload(b)
+	attrs := make([]benchMetadataAttribute, 0, 8)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		forEachBenchMetric(b, payload, func(m Metric) {
+			attrs = attrs[:0]
+			err := forEachBytesFieldHandRolled([]byte(m), 12, func(raw []byte) error {
+				kv := KeyValue(raw)
+				key, err := kv.Key()
+				if err != nil {
+					return err
+				}
+				value, err := kv.ValueRaw()
+				if err != nil {
+					return err
+				}
+				attrs = append(attrs, benchMetadataAttribute{key, value})
+				return nil
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+		})
+	}
+}
+
+func BenchmarkMetric_Metadata_Seq(b *testing.B) {
+	payload := benchMetadataPayload(b)
+	attrs := make([]benchMetadataAttribute, 0, 8)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		forEachBenchMetric(b, payload, func(m Metric) {
+			attrs = attrs[:0]
+			for kv, err := range m.MetadataSeq {
+				if err != nil {
+					b.Fatal(err)
+				}
+				key, keyErr := kv.Key()
+				if keyErr != nil {
+					b.Fatal(keyErr)
+				}
+				value, valueErr := kv.ValueRaw()
+				if valueErr != nil {
+					b.Fatal(valueErr)
+				}
+				attrs = append(attrs, benchMetadataAttribute{key, value})
+			}
+		})
 	}
 }

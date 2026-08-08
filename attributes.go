@@ -33,11 +33,10 @@ func (kv KeyValue) StringValue() ([]byte, bool, error) {
 }
 
 // keyValueSeq walks the repeated KeyValue field at fieldNum, yielding each
-// element inline. It backs every AttributesSeq method; the field number
-// differs per container (Resource 1, InstrumentationScope 3, and per
-// data-point type for DataPoint). On a parse error it yields a nil KeyValue
-// with a non-nil error and stops. Nothing escapes, so iterating allocates
-// nothing.
+// element inline. The field number differs per container, so the caller
+// supplies it and documents its own choice. On a parse error it yields a nil
+// KeyValue with a non-nil error and stops. Nothing escapes, so iterating
+// allocates nothing.
 func keyValueSeq(data []byte, fieldNum protowire.Number, yield func(KeyValue, error) bool) {
 	forEachRepeatedField(data, fieldNum, func(rb []byte, err error) bool {
 		if err != nil {
