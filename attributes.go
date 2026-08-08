@@ -327,7 +327,7 @@ type resourceStringAttributeState struct {
 // scanResourceStringAttribute validates a complete Resource message and
 // records the first matching attribute only. pdata's resource map keeps that
 // first duplicate key. When the caller's Resource value came from merging 2+
-// wire occurrences (see extractResourceMessage), the merged bytes already
+// wire occurrences (see extractMergedMessage), the merged bytes already
 // hold every occurrence's attributes concatenated in wire order, so this
 // single pass reproduces the merge's first-value-wins behavior without any
 // extra merge-aware logic here.

@@ -1488,6 +1488,49 @@ func TestMetricName_Absent(t *testing.T) {
 	require.Nil(t, name)
 }
 
+// TestMetricName_LastValueWins covers the E-2942 change from first-match to
+// protobuf singular-scalar semantics. pdata assigns on each occurrence, so the
+// last one wins; the previous first-match behavior diverged.
+func TestMetricName_LastValueWins(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "first")
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendString(m, "1")
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "second")
+
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, "second", string(name))
+
+	// pdata is the oracle: wrap the metric into a full request and compare.
+	sm := protowire.AppendTag(nil, 2, protowire.BytesType)
+	sm = protowire.AppendVarint(sm, uint64(len(m)))
+	sm = append(sm, m...)
+	rm := protowire.AppendTag(nil, 2, protowire.BytesType)
+	rm = protowire.AppendVarint(rm, uint64(len(sm)))
+	rm = append(rm, sm...)
+
+	req := pmetricotlp.NewExportRequest()
+	require.NoError(t, req.UnmarshalProto(wrapAsRequest(rm)))
+	require.Equal(t, "second",
+		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name())
+}
+
+// TestMetricName_MalformedTrailingField pins the validation-scope consequence
+// of the full scan: corruption after the last name occurrence is now reported.
+func TestMetricName_MalformedTrailingField(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "requests")
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendVarint(m, 64) // declares more than it carries
+
+	_, err := m.Name()
+	require.Error(t, err)
+}
+
 // buildAllTypesMetrics builds one metric of each of the five types, each
 // with two datapoints carrying attributes {"method":"GET","status":"200"}
 // and timestamp 1000000000.

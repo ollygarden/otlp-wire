@@ -27,13 +27,20 @@ func (r ResourceLogs) LogRecordCount() (int, error) {
 // Resource returns the Resource message for this ResourceLogs. It returns
 // (nil, nil) when the field is absent, aliases the input for the single
 // occurrence every real producer emits, and merges 2+ occurrences into a new
-// buffer. See extractResourceMessage for the full contract.
+// buffer. See extractMergedMessage for the full contract.
 func (r ResourceLogs) Resource() (Resource, error) {
-	raw, err := extractResourceMessage([]byte(r))
+	raw, err := extractMergedMessage([]byte(r), 1)
 	if err != nil {
 		return nil, err
 	}
 	return Resource(raw), nil
+}
+
+// SchemaUrl returns the ResourceLogs schema_url (field 3) as a view into the
+// underlying buffer. Returns nil if the field is not present. Repeated
+// occurrences resolve to the last one.
+func (r ResourceLogs) SchemaUrl() ([]byte, error) {
+	return extractLastBytesField([]byte(r), 3)
 }
 
 // WriteTo writes the ResourceLogs as a valid ExportLogsServiceRequest to w.
@@ -47,6 +54,25 @@ func (r ResourceLogs) WriteTo(w io.Writer) (int64, error) {
 // The returned function should be called after iteration to check for errors.
 func (r ResourceLogs) ScopeLogs() (iter.Seq[ScopeLogs], func() error) {
 	return repeatedFieldSeq[ScopeLogs]([]byte(r), 2)
+}
+
+// Scope returns the InstrumentationScope for this ScopeLogs. It returns
+// (nil, nil) when the field is absent, aliases the input for the single
+// occurrence every real producer emits, and merges 2+ occurrences into a new
+// buffer. See extractMergedMessage for the full contract.
+func (s ScopeLogs) Scope() (InstrumentationScope, error) {
+	raw, err := extractMergedMessage([]byte(s), 1)
+	if err != nil {
+		return nil, err
+	}
+	return InstrumentationScope(raw), nil
+}
+
+// SchemaUrl returns the ScopeLogs schema_url (field 3) as a view into the
+// underlying buffer. Returns nil if the field is not present. Repeated
+// occurrences resolve to the last one.
+func (s ScopeLogs) SchemaUrl() ([]byte, error) {
+	return extractLastBytesField([]byte(s), 3)
 }
 
 // LogRecords returns an iterator over LogRecords in this ScopeLogs.

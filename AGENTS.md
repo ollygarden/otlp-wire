@@ -36,10 +36,11 @@ before/after results under the same conditions.
 This is one package and one module, `go.olly.garden/otlp-wire`. Production
 code is split by domain: public types in `types.go`, signal traversal in
 `metrics.go`, `logs.go`, and `traces.go`, shared attribute semantics in
-`attributes.go`, and low-level protobuf walking in `wire.go`. Functional tests
-are in `otlpwire_test.go` and `log_iteration_test.go`, usage examples in
-`example_test.go`, and comparative benchmarks in
-`benchmark_comparison_test.go`.
+`attributes.go`, signal-generic instrumentation-scope accessors in `scope.go`,
+and low-level protobuf walking in `wire.go`. Functional tests are in
+`otlpwire_test.go`, `log_iteration_test.go`, `resource_test.go`, and
+`scope_test.go`, usage examples in `example_test.go`, and comparative
+benchmarks in `benchmark_comparison_test.go`.
 
 Public wire types are byte slices or small wrappers over byte slices. They
 navigate protobuf fields directly with `protowire.ConsumeTag`,
@@ -48,24 +49,33 @@ navigate protobuf fields directly with `protowire.ConsumeTag`,
 ```text
 ExportMetricsServiceRequest
 └── ResourceMetrics
+    ├── Resource
     └── ScopeMetrics
+        ├── InstrumentationScope
         └── Metric
             └── DataPoint
                 └── KeyValue
 
 ExportLogsServiceRequest
 └── ResourceLogs
+    ├── Resource
+    └── ScopeLogs
+        ├── InstrumentationScope
+        └── LogRecord
 
 ExportTracesServiceRequest
 └── ResourceSpans
+    ├── Resource
     └── ScopeSpans
+        ├── InstrumentationScope
         └── Span
 ```
 
 Field numbers and wire types must stay aligned with the upstream OTLP protobuf
 definitions. Shared helpers such as repeated-field counting/iteration, field
-skipping, resource extraction/writing, and fixed-byte extraction are the
-building blocks for new accessors.
+skipping, merged singular-message extraction, resource writing, and
+first-match, last-value-wins and fixed-byte extraction are the building blocks
+for new accessors.
 
 ## Iterator and error contracts
 
@@ -78,6 +88,14 @@ building blocks for new accessors.
   per-element allocation cost matters.
 - `DataPoint` carries `MetricType` because OTLP metric bodies use different
   field numbers for timestamps and attributes. Preserve that association.
+- A new accessor for a *singular* field must pick its resolution deliberately:
+  singular messages (`Resource`, `InstrumentationScope`) merge repeated
+  occurrences via `extractMergedMessage`; singular scalars (`SchemaUrl`,
+  scope `Name`/`Version`, `Metric.Name`) take the last occurrence via
+  `extractLastBytesField`. Both scan the whole message, so neither can return
+  early. `extractBytesField`'s first-match behavior is reserved for the
+  documented `KeyValue.Key`/`ValueRaw` hashing views. Verify the choice
+  against pdata's generated unmarshal — merge appends, replacement assigns.
 - Malformed tags, lengths, wire types, identifiers, metric bodies, or nested
   messages must return parse errors. Never silently accept corruption to keep
   an iterator moving.

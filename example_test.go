@@ -199,6 +199,64 @@ func ExampleResourceLogs_Resource() {
 	// Output: checkout severity=13
 }
 
+// ExampleScopeLogs_Scope reads instrumentation scope identity and schema URL
+// without unmarshaling the request. Each scope container has exactly one
+// InstrumentationScope, mirroring pdata's object model.
+func ExampleScopeLogs_Scope() {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	resourceLogs.SetSchemaUrl("https://opentelemetry.io/schemas/1.29.0")
+	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+	scopeLogs.Scope().SetName("checkout-instrumentation")
+	scopeLogs.Scope().SetVersion("1.2.3")
+	scopeLogs.LogRecords().AppendEmpty()
+
+	data, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	request := otlpwire.ExportLogsServiceRequest(data)
+	resources, resourceErr := request.ResourceLogs()
+	for resource := range resources {
+		schemaURL, err := resource.SchemaUrl()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		scopes, scopeErr := resource.ScopeLogs()
+		for scopeLogs := range scopes {
+			scope, err := scopeLogs.Scope()
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			name, err := scope.Name()
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			version, err := scope.Version()
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			fmt.Printf("%s@%s schema=%s\n", name, version, schemaURL)
+		}
+		if err := scopeErr(); err != nil {
+			fmt.Println(err)
+			return
+		}
+	}
+	if err := resourceErr(); err != nil {
+		fmt.Println(err)
+	}
+
+	// Output: checkout-instrumentation@1.2.3 schema=https://opentelemetry.io/schemas/1.29.0
+}
+
 // Helper functions
 
 func createSampleMetrics(dataPoints int) pmetric.Metrics {

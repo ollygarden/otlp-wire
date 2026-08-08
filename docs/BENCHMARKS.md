@@ -237,6 +237,116 @@ machine; this machine's absolute numbers differ from the Apple M4 figures
 recorded for this benchmark above since they are different hardware, but the
 before/after comparison on identical hardware is what matters here).
 
+## Scope, schema_url and Metric.Name (E-2942)
+
+E-2942 added `Scope()` and `SchemaUrl()` across all six containers, plus
+`InstrumentationScope` accessors, and changed `Metric.Name()` from
+first-match to protobuf singular-scalar (last-value-wins) resolution. Both
+new resolutions must scan the whole enclosing message, so these benchmarks
+quantify that scan and confirm the zero-allocation gates still hold.
+
+**Environment:** 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz, linux/amd64,
+Go 1.25.12. `Metric.Name` was compared against the identical benchmark with
+only the accessor body reverted to `extractBytesField`, so the two sides run
+the same fixture and harness on the same machine in the same session.
+
+**Commands:**
+
+```bash
+go test -run '^$' -bench 'BenchmarkScope_(SingleOccurrence|MultipleOccurrences|NameVersion_WireFormat|NameVersion_Unmarshal)$' -benchmem -count=10 ./...
+go test -run '^$' -bench 'ScanScaling' -benchmem -count=5 ./...
+go test -run '^$' -bench 'BenchmarkMetric_Name$' -benchmem -count=6 ./...
+```
+
+### Scope access versus full decode
+
+**Fixture:** an `ExportLogsServiceRequest` holding one resource container, one
+scope container and one populated scope (name, version, one attribute), built
+with `protowire`. The wire side opens both closure-based iterators and reads
+name and version; the baseline unmarshals the same bytes with
+`plogotlp.ExportRequest` and reads the same two fields. Medians of 10 runs.
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| `BenchmarkScope_NameVersion_WireFormat` | 221 | 72 | 4 |
+| `BenchmarkScope_NameVersion_Unmarshal` | 501 | 360 | 10 |
+| `BenchmarkScope_SingleOccurrence` (accessor alone) | 11.2 | 0 | 0 |
+| `BenchmarkScope_MultipleOccurrences` (3 occurrences, merges) | 187 | 112 | 2 |
+
+The four allocations on the wire side are the two closure-based iterators
+being opened, not `Scope()` — the accessor itself is zero-allocation, as the
+single-occurrence row shows.
+
+**What this comparison does and does not prove.** The baseline is a full pdata
+decode of the same bytes. It stands in for the consumer code this API replaces
+— dibber unmarshals a generated `InstrumentationScope` per scope, sage
+strict-parses one per occurrence — but it is not either implementation
+verbatim. Reproducing them exactly would mean adding `go.opentelemetry.io/proto/otlp`
+as a dependency of a public library purely for a benchmark, which was judged
+not worth the supply-chain surface. Treat these numbers as the order of
+magnitude, and validate the real saving in the consumer migrations, which are
+tracked separately.
+
+### Scan cost scales with the container
+
+Merging must find every occurrence and last-value-wins must reach the final
+one, so neither accessor can stop early. Cost therefore grows with the number
+of sibling fields. This matters more here than for `Resource()`: a resource
+container holds a handful of scopes, whereas a scope container holds every
+record. One scope, then *n* 64-byte log records, then a `schema_url`; medians
+of 5 runs.
+
+| records | `ScopeLogs.Scope()` | `ScopeLogs.SchemaUrl()` |
+|---:|---:|---:|
+| 1 | 34.4 ns | 30.4 ns |
+| 100 | 1106 ns | 1021 ns |
+| 1000 | 10636 ns | 9054 ns |
+
+Both remain 0 B/op, 0 allocs/op at every size.
+
+Findings:
+
+- **Roughly 10 ns per skipped record**, allocation-free. A consumer that reads
+  the scope and then iterates the records pays this as a constant factor on a
+  walk it was already doing.
+- **A consumer that reads only the scope and stops early pays the most.**
+  dibber's `scopeFromContainer` returns at the first scope occurrence with a
+  non-empty name and never touches the records; `Scope()` cannot, because
+  proving no later occurrence exists requires reaching the end. That is the
+  price of pdata parity, and it is the same trade already accepted for
+  `Resource()` in E-2941.
+- Each skipped field is still cheap: `protowire.ConsumeFieldValue` reads the
+  length prefix and steps over the body without descending. Growth is in the
+  number of tags, not their size.
+
+### `Metric.Name` — first-match to last-value-wins
+
+**Fixture:** the E-2608 scrape shape (one resource, one scope, 4800 metrics
+with one datapoint each), iterating every metric and reading its name.
+Medians of 6 runs.
+
+| Revision | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| first-match (previous) | 118,496 | 112 | 6 |
+| last-value-wins (this change) | 121,909 | 112 | 6 |
+
+About 3% slower across 4800 metrics — roughly 0.7 ns more per metric — with
+allocations unchanged. A `Metric`'s top-level fields are its name,
+description, unit and one oneof body, so the added scan skips a handful of
+tags and never descends into the datapoints. The correctness reason for the
+change is in [DESIGN.md](DESIGN.md); this measures what it cost.
+
+### Gates unchanged
+
+`BenchmarkResource_SingleOccurrence`, `BenchmarkResource_MultipleOccurrences`,
+`BenchmarkResource_ScanScaling` and `BenchmarkMetrics_Count_WireFormat` were
+re-run on this branch against `main` in a worktree on the same machine.
+Counting stays 0 B/op, 0 allocs/op; `Resource()` keeps its zero-allocation
+single-occurrence path and its 144 B / 2 allocs merge path. Timing
+differences were within run-to-run noise on this machine, which is why no
+before/after table is given for them — generalizing `extractResourceMessage`
+into `extractMergedMessage` added a field-number parameter and no work.
+
 ---
 
 ## Implementation Details

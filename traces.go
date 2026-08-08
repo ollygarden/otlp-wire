@@ -24,13 +24,20 @@ func (r ResourceSpans) SpanCount() (int, error) {
 // Resource returns the Resource message for this ResourceSpans. It returns
 // (nil, nil) when the field is absent, aliases the input for the single
 // occurrence every real producer emits, and merges 2+ occurrences into a new
-// buffer. See extractResourceMessage for the full contract.
+// buffer. See extractMergedMessage for the full contract.
 func (r ResourceSpans) Resource() (Resource, error) {
-	raw, err := extractResourceMessage([]byte(r))
+	raw, err := extractMergedMessage([]byte(r), 1)
 	if err != nil {
 		return nil, err
 	}
 	return Resource(raw), nil
+}
+
+// SchemaUrl returns the ResourceSpans schema_url (field 3) as a view into the
+// underlying buffer. Returns nil if the field is not present. Repeated
+// occurrences resolve to the last one.
+func (r ResourceSpans) SchemaUrl() ([]byte, error) {
+	return extractLastBytesField([]byte(r), 3)
 }
 
 // WriteTo writes the ResourceSpans as a valid ExportTracesServiceRequest to w.
@@ -49,6 +56,25 @@ func (r ResourceSpans) ScopeSpans() (iter.Seq[ScopeSpans], func() error) {
 // SpanCount returns the number of spans in this ScopeSpans.
 func (s ScopeSpans) SpanCount() (int, error) {
 	return countOccurrences([]byte(s), 2)
+}
+
+// Scope returns the InstrumentationScope for this ScopeSpans. It returns
+// (nil, nil) when the field is absent, aliases the input for the single
+// occurrence every real producer emits, and merges 2+ occurrences into a new
+// buffer. See extractMergedMessage for the full contract.
+func (s ScopeSpans) Scope() (InstrumentationScope, error) {
+	raw, err := extractMergedMessage([]byte(s), 1)
+	if err != nil {
+		return nil, err
+	}
+	return InstrumentationScope(raw), nil
+}
+
+// SchemaUrl returns the ScopeSpans schema_url (field 3) as a view into the
+// underlying buffer. Returns nil if the field is not present. Repeated
+// occurrences resolve to the last one.
+func (s ScopeSpans) SchemaUrl() ([]byte, error) {
+	return extractLastBytesField([]byte(s), 3)
 }
 
 // Spans returns an iterator over Spans in this ScopeSpans.

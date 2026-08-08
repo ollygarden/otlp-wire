@@ -23,6 +23,14 @@ type ResourceLogs []byte
 // per container, matching pdata's object model.
 type Resource []byte
 
+// InstrumentationScope represents an InstrumentationScope message (raw wire
+// bytes).
+//
+// InstrumentationScope values are normally obtained from a ScopeMetrics,
+// ScopeLogs, or ScopeSpans Scope method, which returns exactly one merged
+// scope per container, matching pdata's object model.
+type InstrumentationScope []byte
+
 // ScopeLogs represents a single ScopeLogs message (raw wire bytes).
 type ScopeLogs []byte
 

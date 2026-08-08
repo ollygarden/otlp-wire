@@ -90,6 +90,7 @@ ExportMetricsServiceRequest
 └── ResourceMetrics
     ├── Resource
     └── ScopeMetrics
+        ├── InstrumentationScope
         └── Metric
             └── DataPoint
                 └── KeyValue
@@ -98,14 +99,24 @@ ExportLogsServiceRequest
 └── ResourceLogs
     ├── Resource
     └── ScopeLogs
+        ├── InstrumentationScope
         └── LogRecord
 
 ExportTracesServiceRequest
 └── ResourceSpans
     ├── Resource
     └── ScopeSpans
+        ├── InstrumentationScope
         └── Span
 ```
+
+This hierarchy mirrors pdata's object model deliberately: a container holds
+exactly one Resource and exactly one InstrumentationScope, and each level's
+accessor is named after pdata's. The mirror cannot be exact in one respect —
+otlp-wire parses lazily, so every accessor returns `(T, error)` and cannot
+chain the way pdata's validated-at-unmarshal accessors do. A flattened
+convenience that collapses two error checks is admitted only when a measured
+hot path justifies it.
 
 The exported methods are listed in [README.md](../README.md) and verified by
 [example_test.go](../example_test.go). The contracts below apply across that
@@ -279,6 +290,54 @@ encoded field. `KeyValue.StringValue` is the semantic string accessor: it
 validates the complete KeyValue and AnyValue structure and applies protobuf
 oneof ordering. These two classes of accessor are deliberately different.
 
+### Instrumentation scope and schema URL
+
+**Added in E-2942 (unreleased, v0.1.0).** `ScopeMetrics`, `ScopeLogs`, and
+`ScopeSpans` each expose `Scope() (InstrumentationScope, error)`, and all six
+containers expose `SchemaUrl() ([]byte, error)`.
+
+`Scope()` carries the identical contract to `Resource()` above — exactly one
+per container, absence returns `(nil, nil)`, a single occurrence aliases the
+input with no allocation, 2+ occurrences are validated individually and then
+merged by concatenation, and the merge requires scanning the whole container.
+Every clause in the "Resources and attributes" section applies unchanged,
+because pdata treats both fields the same way: it unmarshals each occurrence
+into the same object.
+
+`InstrumentationScope.Name`, `Version`, `Attributes`, and `AttributesSeq` read
+that message. **Scope attributes are field 3**, where Resource attributes are
+field 1; the accessors absorb the difference, but anyone writing new wire code
+against this hierarchy must not assume they match.
+
+**Singular scalars resolve to the last occurrence (E-2942).** `SchemaUrl`,
+`InstrumentationScope.Name`, `InstrumentationScope.Version`, and `Metric.Name`
+return the *last* occurrence when a field is repeated. Protobuf specifies
+replacement for repeated singular scalars, and pdata implements it with a
+plain assignment. This is the counterpart to the merge rule for singular
+messages, and the distinction is a behavioral contract, not an implementation
+detail: a consumer relying on first-match resolution would diverge from its
+pdata fallback on the same bytes.
+
+Two consequences follow, both mirroring the `Resource()` change:
+
+- These accessors scan the whole enclosing message rather than returning at
+  the first match, so a malformed field located *after* the last occurrence is
+  now reported as an error.
+- Cost grows with the number of sibling fields. For a scope container that
+  means the record count, which is larger than the scope count a resource
+  container holds. The walk stays allocation-free and skips record bodies
+  without descending; see [BENCHMARKS.md](BENCHMARKS.md) for the measured
+  curve.
+
+**`Metric.Name` behavior change (unreleased, E-2942, v0.1.0).** It previously
+returned the first occurrence. That diverged from pdata in exactly the way
+`Resource()` did before E-2941, so it was corrected rather than left
+inconsistent with the accessors added beside it. The signature is unchanged
+and no consumer surveyed depends on the old resolution; a producer emitting a
+repeated `Metric.name` was already outside what its pdata fallback would agree
+with. `KeyValue.Key` and `ValueRaw` keep first-match semantics deliberately,
+as documented above — they are hashing-oriented views, not parity accessors.
+
 ### Metrics depth
 
 Metrics traversal supports gauge, sum, histogram, exponential histogram, and
@@ -332,16 +391,21 @@ is part of this library's purpose and compatibility surface.
 
 - Counting valid requests is zero-allocation.
 - Ordinary iterator opens have the documented small closure cost.
-- `DataPointsSeq`, `AttributesSeq`, and `LogRecordsSeq` remain zero-allocation
-  on their per-element paths.
+- `DataPointsSeq`, `AttributesSeq` (on both `Resource` and
+  `InstrumentationScope`), and `LogRecordsSeq` remain zero-allocation on their
+  per-element paths.
 - Accessors return aliased slices rather than copying payload data, with one
-  documented exception: `Resource()` aliases the input when a container holds
-  a single Resource occurrence (the case every real producer emits) and
-  allocates a concatenated buffer only when merging 2+ occurrences
-  (unreleased, E-2941, v0.1.0). See "Resources and attributes" above and
-  `BenchmarkResource_SingleOccurrence` /
-  `BenchmarkResource_MultipleOccurrences` in
+  documented exception: `Resource()` and `Scope()` alias the input when a
+  container holds a single occurrence of that field (the case every real
+  producer emits) and allocate a concatenated buffer only when merging 2+
+  occurrences (unreleased, E-2941 and E-2942, v0.1.0). See "Resources and
+  attributes" and "Instrumentation scope and schema URL" above, and the
+  `SingleOccurrence` / `MultipleOccurrences` benchmarks in
   [BENCHMARKS.md](BENCHMARKS.md).
+- Accessors that must scan a whole message to resolve a singular field
+  (`Resource()`, `Scope()`, and the last-value-wins scalars) cost time
+  proportional to the enclosing message's field count, not its payload size,
+  and remain allocation-free.
 - Production code must not introduce pdata or generated-message unmarshaling.
 
 Exact timings are environment-specific, not API guarantees. Any performance
