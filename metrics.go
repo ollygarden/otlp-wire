@@ -137,20 +137,16 @@ func (m Metric) Name() ([]byte, error) {
 // 12). The returned function should be called after iteration to check for
 // errors.
 //
-// metadata is a repeated field: every occurrence is yielded in wire order,
-// duplicate keys included, matching pdata.
+// metadata is repeated, so every occurrence is yielded in wire order with
+// duplicate keys preserved; the singular-field resolution the other accessors
+// apply does not apply here.
 func (m Metric) Metadata() (iter.Seq[KeyValue], func() error) {
 	return repeatedFieldSeq[KeyValue]([]byte(m), 12)
 }
 
-// MetadataSeq is a zero-allocation alternative to Metadata. It has the shape
-// of an iter.Seq2[KeyValue, error] and is meant to be ranged over directly:
-//
-//	for kv, err := range m.MetadataSeq {
-//		if err != nil { ... }
-//	}
-//
-// On a parse error it yields a nil KeyValue with a non-nil error and stops.
+// MetadataSeq is a zero-allocation alternative to Metadata, shaped like an
+// iter.Seq2[KeyValue, error] and meant to be ranged over directly. On a parse
+// error it yields a nil KeyValue with a non-nil error and stops.
 func (m Metric) MetadataSeq(yield func(KeyValue, error) bool) {
 	keyValueSeq([]byte(m), 12, yield)
 }

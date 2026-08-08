@@ -138,9 +138,7 @@ func ExampleMetric_DataPoints() {
 }
 
 // ExampleMetric_Metadata reads the metadata a receiver attaches to a metric.
-// It is a repeated field, so occurrences are yielded in wire order, duplicate
-// keys included. MetadataSeq is the zero-allocation variant to reach for when
-// a hot path combines metadata with every data point's attributes.
+// MetadataSeq is the zero-allocation variant for hot paths.
 func ExampleMetric_Metadata() {
 	metrics := pmetric.NewMetrics()
 	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
@@ -165,9 +163,6 @@ func ExampleMetric_Metadata() {
 	// http.server.duration prometheus.unit=seconds
 }
 
-// printMetricMetadata prints every metric's metadata, keeping the example body
-// free of the error checks the lazy accessors require: each can fail, and
-// every iterator's error closure must be checked after its range.
 func printMetricMetadata(data []byte) error {
 	resources, resourcesErr := otlpwire.ExportMetricsServiceRequest(data).ResourceMetrics()
 	for rm := range resources {

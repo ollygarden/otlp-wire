@@ -1,11 +1,8 @@
 package otlpwire
 
-// Tests for Metric.Metadata and Metric.MetadataSeq (Metric field 12, repeated
-// KeyValue). Fixtures are built with protowire because pdata's Map API cannot
-// emit duplicate keys or malformed shapes; pdata is the oracle for meaning.
-// The shared repeated-field machinery is covered in resource_test.go and
-// scope_test.go; what is pinned here is the field number, wire order across
-// duplicates, and the two variants' contracts.
+// Fixtures use protowire because pdata's Map API cannot emit duplicate keys or
+// malformed shapes; pdata stays the oracle for meaning. The shared
+// repeated-field machinery is covered in resource_test.go and scope_test.go.
 
 import (
 	"bytes"
@@ -18,15 +15,12 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
-// metadataEntry wraps an encoded KeyValue as one metadata occurrence.
 func metadataEntry(kv []byte) []byte {
 	out := protowire.AppendTag(nil, 12, protowire.BytesType)
 	out = protowire.AppendVarint(out, uint64(len(kv)))
 	return append(out, kv...)
 }
 
-// metricWithMetadata builds a Metric with a name (field 1) and metadata
-// occurrences in order.
 func metricWithMetadata(name string, kvs ...[]byte) []byte {
 	out := protowire.AppendTag(nil, 1, protowire.BytesType)
 	out = protowire.AppendString(out, name)
@@ -36,8 +30,6 @@ func metricWithMetadata(name string, kvs ...[]byte) []byte {
 	return out
 }
 
-// metricsPayloadWithMetric wraps a Metric as a one-resource, one-scope request
-// so pdata can read the same bytes.
 func metricsPayloadWithMetric(metric []byte) []byte {
 	scope := protowire.AppendTag(nil, 2, protowire.BytesType)
 	scope = protowire.AppendVarint(scope, uint64(len(metric)))
@@ -47,8 +39,6 @@ func metricsPayloadWithMetric(metric []byte) []byte {
 
 type metadataPair struct{ key, value string }
 
-// collectMetadata drains both variants, requires they agree, and checks the
-// capacity clamp on every yielded view.
 func collectMetadata(t *testing.T, m Metric) []metadataPair {
 	t.Helper()
 
@@ -134,9 +124,7 @@ func TestMetricMetadata_MatchesPdata(t *testing.T) {
 	}
 }
 
-// TestMetricMetadata_PresentButNotAString covers entries StringValue declines:
-// a zero-length occurrence is a present entry, not an absent field. Both
-// variants must yield it.
+// A zero-length occurrence is a present entry, not an absent field.
 func TestMetricMetadata_PresentButNotAString(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -263,8 +251,6 @@ func TestMetricMetadata_MalformedWire(t *testing.T) {
 	}
 }
 
-// TestMetricMetadata_MalformedKeyValueSurfacesOnAccess separates framing from
-// contents: a well-framed entry whose contents are corrupt fails on read.
 func TestMetricMetadata_MalformedKeyValueSurfacesOnAccess(t *testing.T) {
 	seq, errFunc := Metric(metadataEntry([]byte{0xFF})).Metadata()
 	count := 0
@@ -277,10 +263,8 @@ func TestMetricMetadata_MalformedKeyValueSurfacesOnAccess(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
-// TestMetricMetadata_EarlyStop covers both halves of the lazy-iteration
-// contract: an early exit still requires the error closure to be checked, and
-// it leaves later bytes unvisited, so trailing corruption surfaces only on a
-// full drain.
+// An early exit leaves later bytes unvisited, so trailing corruption surfaces
+// only on a full drain.
 func TestMetricMetadata_EarlyStop(t *testing.T) {
 	metric := metricWithMetadata("m",
 		stringKeyValue("a", "1"), stringKeyValue("b", "2"), stringKeyValue("c", "3"))
@@ -304,10 +288,6 @@ func TestMetricMetadata_EarlyStop(t *testing.T) {
 	require.Error(t, errFunc(), "draining reaches the corruption")
 }
 
-// TestMetricMetadata_ViewAndAllocationContract pins what the accessors promise
-// beyond their values: yielded KeyValues alias the caller's buffer rather than
-// copying it, the closure form may be ranged more than once, and neither form
-// allocates per element.
 func TestMetricMetadata_ViewAndAllocationContract(t *testing.T) {
 	m := Metric(metricWithMetadata("m",
 		stringKeyValue("a", "1"), stringKeyValue("b", "2")))
@@ -324,8 +304,7 @@ func TestMetricMetadata_ViewAndAllocationContract(t *testing.T) {
 	}
 	require.Equal(t, [2]int{2, 2}, passes, "ranging the same seq twice must agree")
 
-	// Views must alias the metric buffer, not copy it: writing through the
-	// buffer is visible in an already-yielded view.
+	// A copy would keep the old byte.
 	var first KeyValue
 	seq, errFunc = m.Metadata()
 	for kv := range seq {

@@ -1281,8 +1281,6 @@ func BenchmarkMetric_Name(b *testing.B) {
 
 // ========== Metric.Metadata ==========
 
-// benchMetadataAttribute mirrors what a cardinality consumer keeps per
-// attribute: aliased key and encoded-AnyValue views.
 type benchMetadataAttribute struct{ key, value []byte }
 
 // forEachBytesFieldHandRolled is the field-12 walk marigold hand-rolls in
@@ -1327,9 +1325,8 @@ func benchMetadataPayload(b *testing.B) []byte {
 	return payload
 }
 
-// forEachBenchMetric walks down to every Metric so the arms differ only in how
-// they read metadata. Keep the arms as separate functions: dispatching through
-// a func value defeats inlining and changes what is measured.
+// Keep the arms as separate functions: dispatching through a func value
+// defeats inlining and changes what is measured.
 func forEachBenchMetric(b *testing.B, payload []byte, fn func(Metric)) {
 	resources, resErr := ExportMetricsServiceRequest(payload).ResourceMetrics()
 	for rm := range resources {
