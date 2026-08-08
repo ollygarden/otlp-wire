@@ -32,6 +32,22 @@ func (kv KeyValue) StringValue() ([]byte, bool, error) {
 	return value.stringValue, true, nil
 }
 
+// keyValueSeq walks the repeated KeyValue field at fieldNum, yielding each
+// element inline. It backs every AttributesSeq method; the field number
+// differs per container (Resource 1, InstrumentationScope 3, and per
+// data-point type for DataPoint). On a parse error it yields a nil KeyValue
+// with a non-nil error and stops. Nothing escapes, so iterating allocates
+// nothing.
+func keyValueSeq(data []byte, fieldNum protowire.Number, yield func(KeyValue, error) bool) {
+	forEachRepeatedField(data, fieldNum, func(rb []byte, err error) bool {
+		if err != nil {
+			yield(nil, err)
+			return false
+		}
+		return yield(KeyValue(rb), nil)
+	})
+}
+
 // Attributes returns an iterator over the Resource's attribute KeyValues.
 // The returned function should be called after iteration to check for errors.
 func (r Resource) Attributes() (iter.Seq[KeyValue], func() error) {
@@ -43,13 +59,7 @@ func (r Resource) Attributes() (iter.Seq[KeyValue], func() error) {
 // directly. On a parse error it yields a nil KeyValue with a non-nil error and
 // stops.
 func (r Resource) AttributesSeq(yield func(KeyValue, error) bool) {
-	forEachRepeatedField([]byte(r), 1, func(rb []byte, err error) bool {
-		if err != nil {
-			yield(nil, err)
-			return false
-		}
-		return yield(KeyValue(rb), nil)
-	})
+	keyValueSeq([]byte(r), 1, yield)
 }
 
 // StringAttribute returns the string value of the first resource attribute
@@ -327,7 +337,7 @@ type resourceStringAttributeState struct {
 // scanResourceStringAttribute validates a complete Resource message and
 // records the first matching attribute only. pdata's resource map keeps that
 // first duplicate key. When the caller's Resource value came from merging 2+
-// wire occurrences (see extractResourceMessage), the merged bytes already
+// wire occurrences (see extractMergedMessage), the merged bytes already
 // hold every occurrence's attributes concatenated in wire order, so this
 // single pass reproduces the merge's first-value-wins behavior without any
 // extra merge-aware logic here.

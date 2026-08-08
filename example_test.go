@@ -160,16 +160,16 @@ func ExampleResourceLogs_Resource() {
 		resource, err := resourceLogs.Resource()
 		if err != nil {
 			fmt.Println(err)
-			return
+			break
 		}
 		service, found, err := resource.StringAttribute("service.name")
 		if err != nil {
 			fmt.Println(err)
-			return
+			break
 		}
 		if !found {
 			fmt.Println("service.name missing")
-			return
+			break
 		}
 
 		scopes, scopeErr := resourceLogs.ScopeLogs()
@@ -177,19 +177,19 @@ func ExampleResourceLogs_Resource() {
 			for record, err := range scope.LogRecordsSeq {
 				if err != nil {
 					fmt.Println(err)
-					return
+					break
 				}
 				severity, err := record.SeverityNumber()
 				if err != nil {
 					fmt.Println(err)
-					return
+					break
 				}
 				fmt.Printf("%s severity=%d\n", service, severity)
 			}
 		}
 		if err := scopeErr(); err != nil {
 			fmt.Println(err)
-			return
+			break
 		}
 	}
 	if err := resourceErr(); err != nil {
@@ -197,6 +197,70 @@ func ExampleResourceLogs_Resource() {
 	}
 
 	// Output: checkout severity=13
+}
+
+// ExampleScopeLogs_Scope reads instrumentation scope identity and schema URL
+// without unmarshaling the request. Each scope container has exactly one
+// InstrumentationScope, mirroring pdata's object model.
+func ExampleScopeLogs_Scope() {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	resourceLogs.SetSchemaUrl("https://opentelemetry.io/schemas/1.29.0")
+	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+	scopeLogs.Scope().SetName("checkout-instrumentation")
+	scopeLogs.Scope().SetVersion("1.2.3")
+	scopeLogs.LogRecords().AppendEmpty()
+
+	data, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// Each iterator's error closure must run even when the loop exits early,
+	// so accessor errors break out rather than returning past the check.
+	request := otlpwire.ExportLogsServiceRequest(data)
+	resources, resourceErr := request.ResourceLogs()
+	for resource := range resources {
+		schemaURL, err := resource.SchemaUrl()
+		if err != nil {
+			fmt.Println(err)
+			break
+		}
+
+		scopes, scopeErr := resource.ScopeLogs()
+		for scopeLogs := range scopes {
+			name, version, err := scopeIdentity(scopeLogs)
+			if err != nil {
+				fmt.Println(err)
+				break
+			}
+			fmt.Printf("%s@%s schema=%s\n", name, version, schemaURL)
+		}
+		if err := scopeErr(); err != nil {
+			fmt.Println(err)
+			break
+		}
+	}
+	if err := resourceErr(); err != nil {
+		fmt.Println(err)
+	}
+
+	// Output: checkout-instrumentation@1.2.3 schema=https://opentelemetry.io/schemas/1.29.0
+}
+
+// scopeIdentity reads a scope's name and version, keeping the example's loop
+// body free of the three error checks the lazy accessors require.
+func scopeIdentity(scopeLogs otlpwire.ScopeLogs) (name, version []byte, err error) {
+	scope, err := scopeLogs.Scope()
+	if err != nil {
+		return nil, nil, err
+	}
+	if name, err = scope.Name(); err != nil {
+		return nil, nil, err
+	}
+	version, err = scope.Version()
+	return name, version, err
 }
 
 // Helper functions

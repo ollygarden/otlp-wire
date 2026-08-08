@@ -54,10 +54,9 @@ func containerWithResources(resources ...[]byte) []byte {
 	return protowire.AppendVarint(out, 0)
 }
 
-// resourceWithStringAttr builds a Resource message carrying one string
-// attribute (Resource.attributes is field 1, KeyValue.key field 1,
-// KeyValue.value field 2, AnyValue.string_value field 1).
-func resourceWithStringAttr(key, value string) []byte {
+// stringKeyValue builds a KeyValue message with a string value (KeyValue.key
+// is field 1, KeyValue.value field 2, AnyValue.string_value field 1).
+func stringKeyValue(key, value string) []byte {
 	anyValue := protowire.AppendTag(nil, 1, protowire.BytesType)
 	anyValue = protowire.AppendString(anyValue, value)
 
@@ -65,8 +64,13 @@ func resourceWithStringAttr(key, value string) []byte {
 	kv = protowire.AppendString(kv, key)
 	kv = protowire.AppendTag(kv, 2, protowire.BytesType)
 	kv = protowire.AppendVarint(kv, uint64(len(anyValue)))
-	kv = append(kv, anyValue...)
+	return append(kv, anyValue...)
+}
 
+// resourceWithStringAttr builds a Resource message carrying one string
+// attribute. Resource.attributes is field 1.
+func resourceWithStringAttr(key, value string) []byte {
+	kv := stringKeyValue(key, value)
 	res := protowire.AppendTag(nil, 1, protowire.BytesType)
 	res = protowire.AppendVarint(res, uint64(len(kv)))
 	return append(res, kv...)
@@ -78,6 +82,7 @@ func resourceWithStringAttr(key, value string) []byte {
 // ResourceSpans, letting one test body cover all three signals.
 type resourceGetter interface {
 	Resource() (Resource, error)
+	SchemaUrl() ([]byte, error)
 }
 
 type signalFixture struct {
@@ -86,6 +91,9 @@ type signalFixture struct {
 	// attrs returns the container's Resource attributes via pdata, the oracle
 	// for merge and absence behavior.
 	attrs func(t *testing.T, payload []byte) pcommon.Map
+	// schemaURL returns the container's schema_url via pdata, the oracle for
+	// singular-scalar resolution.
+	schemaURL func(t *testing.T, payload []byte) string
 }
 
 var signalFixtures = []signalFixture{
@@ -99,6 +107,12 @@ var signalFixtures = []signalFixture{
 			require.Equal(t, 1, req.Metrics().ResourceMetrics().Len())
 			return req.Metrics().ResourceMetrics().At(0).Resource().Attributes()
 		},
+		schemaURL: func(t *testing.T, payload []byte) string {
+			t.Helper()
+			req := pmetricotlp.NewExportRequest()
+			require.NoError(t, req.UnmarshalProto(payload))
+			return req.Metrics().ResourceMetrics().At(0).SchemaUrl()
+		},
 	},
 	{
 		name: "logs",
@@ -110,6 +124,12 @@ var signalFixtures = []signalFixture{
 			require.Equal(t, 1, req.Logs().ResourceLogs().Len())
 			return req.Logs().ResourceLogs().At(0).Resource().Attributes()
 		},
+		schemaURL: func(t *testing.T, payload []byte) string {
+			t.Helper()
+			req := plogotlp.NewExportRequest()
+			require.NoError(t, req.UnmarshalProto(payload))
+			return req.Logs().ResourceLogs().At(0).SchemaUrl()
+		},
 	},
 	{
 		name: "traces",
@@ -120,6 +140,12 @@ var signalFixtures = []signalFixture{
 			require.NoError(t, req.UnmarshalProto(payload))
 			require.Equal(t, 1, req.Traces().ResourceSpans().Len())
 			return req.Traces().ResourceSpans().At(0).Resource().Attributes()
+		},
+		schemaURL: func(t *testing.T, payload []byte) string {
+			t.Helper()
+			req := ptraceotlp.NewExportRequest()
+			require.NoError(t, req.UnmarshalProto(payload))
+			return req.Traces().ResourceSpans().At(0).SchemaUrl()
 		},
 	},
 }
@@ -450,6 +476,136 @@ func TestResource_ValidOccurrencesStillMerge(t *testing.T) {
 				require.True(t, found, "attribute %q must survive the merge", key)
 				require.Equal(t, want, string(value))
 			}
+		})
+	}
+}
+
+// ---------- schema_url: a singular scalar, not a merged message ----------
+
+// TestResourceSchemaUrl covers the container-level schema_url (field 3).
+// Unlike Resource, it is a singular *scalar*: protobuf and pdata resolve a
+// repeated occurrence to the last one rather than merging.
+func TestResourceSchemaUrl(t *testing.T) {
+	tests := []struct {
+		name string
+		urls []string
+		want string
+	}{
+		{"absent", nil, ""},
+		{"single", []string{"https://example.test/v1"}, "https://example.test/v1"},
+		{"repeated", []string{"https://example.test/v1", "https://example.test/v2"}, "https://example.test/v2"},
+		{"last is empty", []string{"https://example.test/v1", ""}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			container := containerWithResource(resourceWithStringAttr("service.name", "checkout"))
+			for _, u := range tt.urls {
+				container = protowire.AppendTag(container, 3, protowire.BytesType)
+				container = protowire.AppendString(container, u)
+			}
+			payload := wrapAsRequest(container)
+
+			for _, sf := range signalFixtures {
+				t.Run(sf.name, func(t *testing.T) {
+					require.Equal(t, tt.want, sf.schemaURL(t, payload), "pdata schema_url")
+
+					got, err := sf.wrap(container).SchemaUrl()
+					require.NoError(t, err)
+					require.Equal(t, tt.want, string(got))
+					if tt.urls == nil {
+						require.Nil(t, got, "an absent schema_url is (nil, nil)")
+					}
+				})
+			}
+		})
+	}
+}
+
+// ---------- Resource.AttributesSeq ----------
+
+// TestResource_AttributesSeq covers the zero-allocation attribute path, which
+// scope_test.go cites as the gate its own AttributesSeq must match. It reads
+// Resource attributes from field 1; a wrong field number here would silently
+// yield nothing to every caller on the hot path.
+func TestResource_AttributesSeq(t *testing.T) {
+	res := append(resourceWithStringAttr("service.name", "checkout"),
+		resourceWithStringAttr("host.name", "host-1")...)
+	resource := Resource(res)
+
+	var got [][2]string
+	resource.AttributesSeq(func(kv KeyValue, err error) bool {
+		require.NoError(t, err)
+		key, err := kv.Key()
+		require.NoError(t, err)
+		value, found, err := kv.StringValue()
+		require.NoError(t, err)
+		require.True(t, found)
+		got = append(got, [2]string{string(key), string(value)})
+		return true
+	})
+	require.Equal(t, [][2]string{
+		{"service.name", "checkout"},
+		{"host.name", "host-1"},
+	}, got)
+
+	// Same elements as the closure-based iterator.
+	var viaIter [][2]string
+	seq, errFn := resource.Attributes()
+	for kv := range seq {
+		key, err := kv.Key()
+		require.NoError(t, err)
+		value, _, err := kv.StringValue()
+		require.NoError(t, err)
+		viaIter = append(viaIter, [2]string{string(key), string(value)})
+	}
+	require.NoError(t, errFn())
+	require.Equal(t, got, viaIter)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		count := 0
+		resource.AttributesSeq(func(_ KeyValue, err error) bool {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+			return true
+		})
+		if count != 2 {
+			t.Fatalf("expected 2 attributes, got %d", count)
+		}
+	})
+	require.Zero(t, allocs)
+}
+
+// TestIteratedViewsAreCapacityClamped pins the guarantee that a yielded view
+// cannot be appended into its neighbours. protowire hands back slices whose
+// capacity runs to the end of the enclosing message, so without the clamp in
+// forEachRepeatedField a caller's append would corrupt the OTLP buffer it
+// does not own.
+func TestIteratedViewsAreCapacityClamped(t *testing.T) {
+	res := append(resourceWithStringAttr("service.name", "checkout"),
+		resourceWithStringAttr("host.name", "host-1")...)
+	scope := append(scopeWithStringAttr("library.language", "go"),
+		scopeWithStringAttr("library.name", "otel")...)
+
+	for _, tc := range []struct {
+		name string
+		seq  func(func(KeyValue, error) bool)
+	}{
+		{"resource", Resource(res).AttributesSeq},
+		{"scope", InstrumentationScope(scope).AttributesSeq},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			visited := 0
+			tc.seq(func(kv KeyValue, err error) bool {
+				require.NoError(t, err)
+				visited++
+				require.Equal(t, len(kv), cap(kv),
+					"yielded KeyValue must be capacity-clamped")
+				return true
+			})
+			require.Equal(t, 2, visited)
 		})
 	}
 }

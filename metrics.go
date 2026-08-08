@@ -49,13 +49,7 @@ func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error) {
 //
 // On a parse error it yields a nil KeyValue with a non-nil error and stops.
 func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool) {
-	forEachRepeatedField(d.raw, d.attributesFieldNum(), func(rb []byte, err error) bool {
-		if err != nil {
-			yield(nil, err)
-			return false
-		}
-		return yield(KeyValue(rb), nil)
-	})
+	keyValueSeq(d.raw, d.attributesFieldNum(), yield)
 }
 
 // DataPointCount returns the total number of metric data points in the batch.
@@ -77,13 +71,20 @@ func (r ResourceMetrics) DataPointCount() (int, error) {
 // Resource returns the Resource message for this ResourceMetrics. It returns
 // (nil, nil) when the field is absent, aliases the input for the single
 // occurrence every real producer emits, and merges 2+ occurrences into a new
-// buffer. See extractResourceMessage for the full contract.
+// buffer. See extractMergedMessage for the full contract.
 func (r ResourceMetrics) Resource() (Resource, error) {
-	raw, err := extractResourceMessage([]byte(r))
+	raw, err := extractMergedMessage([]byte(r), 1)
 	if err != nil {
 		return nil, err
 	}
 	return Resource(raw), nil
+}
+
+// SchemaUrl returns the ResourceMetrics schema_url (field 3) as a view into
+// the underlying buffer. Returns nil if the field is not present. Repeated
+// occurrences resolve to the last one.
+func (r ResourceMetrics) SchemaUrl() ([]byte, error) {
+	return extractLastBytesField([]byte(r), 3)
 }
 
 // WriteTo writes the ResourceMetrics as a valid ExportMetricsServiceRequest to w.
@@ -99,6 +100,25 @@ func (r ResourceMetrics) ScopeMetrics() (iter.Seq[ScopeMetrics], func() error) {
 	return repeatedFieldSeq[ScopeMetrics]([]byte(r), 2)
 }
 
+// Scope returns the InstrumentationScope for this ScopeMetrics. It returns
+// (nil, nil) when the field is absent, aliases the input for the single
+// occurrence every real producer emits, and merges 2+ occurrences into a new
+// buffer. See extractMergedMessage for the full contract.
+func (s ScopeMetrics) Scope() (InstrumentationScope, error) {
+	raw, err := extractMergedMessage([]byte(s), 1)
+	if err != nil {
+		return nil, err
+	}
+	return InstrumentationScope(raw), nil
+}
+
+// SchemaUrl returns the ScopeMetrics schema_url (field 3) as a view into the
+// underlying buffer. Returns nil if the field is not present. Repeated
+// occurrences resolve to the last one.
+func (s ScopeMetrics) SchemaUrl() ([]byte, error) {
+	return extractLastBytesField([]byte(s), 3)
+}
+
 // Metrics returns an iterator over Metrics in this ScopeMetrics.
 // Field 2 in the ScopeMetrics protobuf message.
 // The returned function should be called after iteration to check for errors.
@@ -107,9 +127,10 @@ func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error) {
 }
 
 // Name returns the metric name (field 1) as a view into the underlying
-// buffer. Returns nil if the field is not present.
+// buffer. Returns nil if the field is not present. Repeated occurrences
+// resolve to the last one; see extractLastBytesField.
 func (m Metric) Name() ([]byte, error) {
-	return extractBytesField([]byte(m), 1)
+	return extractLastBytesField([]byte(m), 1)
 }
 
 // DataPoints returns an iterator over datapoints in this Metric, descending

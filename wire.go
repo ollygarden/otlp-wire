@@ -105,6 +105,12 @@ func countOccurrences(data []byte, fieldNum protowire.Number) (int, error) {
 
 // forEachRepeatedField iterates over a repeated field, calling fn for each occurrence.
 // The callback receives field bytes or an error. Return false to stop iteration.
+//
+// Yielded slices have their capacity clamped to their length. ConsumeBytes
+// hands back a slice whose capacity runs to the end of the enclosing message,
+// so an unclamped view would let a caller's append overwrite the sibling
+// fields that follow it in a buffer the library does not own. Every accessor
+// built on this helper inherits the guarantee.
 func forEachRepeatedField(data []byte, fieldNum protowire.Number, fn func([]byte, error) bool) {
 	pos := 0
 
@@ -128,7 +134,7 @@ func forEachRepeatedField(data []byte, fieldNum protowire.Number, fn func([]byte
 			}
 			pos += n
 
-			if !fn(msgBytes, nil) {
+			if !fn(msgBytes[:len(msgBytes):len(msgBytes)], nil) {
 				return
 			}
 		} else {
@@ -149,22 +155,25 @@ func validateMessageFraming(data []byte) error {
 	for pos := 0; pos < len(data); {
 		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return errors.New("malformed protobuf tag in resource occurrence")
+			return errors.New("malformed protobuf tag in message occurrence")
 		}
 		pos += tagLen
 
 		n := skipField(data[pos:], num, wireType)
 		if n < 0 {
-			return errors.New("malformed field in resource occurrence")
+			return errors.New("malformed field in message occurrence")
 		}
 		pos += n
 	}
 	return nil
 }
 
-// extractResourceMessage returns the Resource message (field 1) of a
-// ResourceMetrics/ResourceLogs/ResourceSpans, merging repeated occurrences the
-// way protobuf and pdata do.
+// extractMergedMessage returns the singular embedded message at fieldNum,
+// merging repeated occurrences the way protobuf and pdata do. It backs both
+// the Resource field (field 1) of a ResourceMetrics/ResourceLogs/ResourceSpans
+// and the InstrumentationScope field (field 1) of a
+// ScopeMetrics/ScopeLogs/ScopeSpans: pdata unmarshals every occurrence of each
+// into the same struct, so both accumulate rather than replace.
 //
 // An absent field returns (nil, nil); malformed framing returns an error. One
 // occurrence aliases data; two or more are each validated, then concatenated
@@ -175,27 +184,26 @@ func validateMessageFraming(data []byte) error {
 //
 // docs/DESIGN.md covers why concatenation is a correct merge and why each
 // occurrence is validated first; docs/BENCHMARKS.md has the scan cost.
-func extractResourceMessage(data []byte) ([]byte, error) {
+func extractMergedMessage(data []byte, fieldNum protowire.Number) ([]byte, error) {
 	var first []byte
 	var found bool
 	var rest [][]byte
 	pos := 0
 
 	for pos < len(data) {
-		fieldNum, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
 			return nil, errors.New("malformed protobuf tag")
 		}
 		pos += tagLen
 
-		// Field 1 = Resource (message)
-		if fieldNum == 1 {
+		if num == fieldNum {
 			if wireType != protowire.BytesType {
-				return nil, errors.New("resource field has wrong wire type")
+				return nil, errors.New("embedded message field has wrong wire type")
 			}
 			msgBytes, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return nil, errors.New("invalid bytes in resource field")
+				return nil, errors.New("invalid bytes in embedded message field")
 			}
 			pos += n
 
@@ -209,7 +217,7 @@ func extractResourceMessage(data []byte) ([]byte, error) {
 		}
 
 		// Skip other fields
-		n := skipField(data[pos:], fieldNum, wireType)
+		n := skipField(data[pos:], num, wireType)
 		if n < 0 {
 			return nil, errors.New("failed to skip field")
 		}
@@ -227,7 +235,7 @@ func extractResourceMessage(data []byte) ([]byte, error) {
 		return first[:len(first):len(first)], nil
 	}
 
-	// Concatenation must not manufacture validity. A Resource spliced across
+	// Concatenation must not manufacture validity. A message spliced across
 	// two occurrences, neither parseable alone, would otherwise reassemble
 	// into a valid message that pdata rejects.
 	if err := validateMessageFraming(first); err != nil {
@@ -283,6 +291,33 @@ func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+// extractLastBytesField extracts a singular length-delimited scalar field,
+// resolving repeated occurrences by last-value-wins the way protobuf and
+// pdata do. Returns nil (not an error) if absent; the returned slice aliases
+// data.
+//
+// Reaching the last occurrence means walking the whole message, so unlike
+// extractBytesField this reports a malformed field after that occurrence.
+// docs/DESIGN.md records why scalars resolve differently from the messages
+// extractMergedMessage merges.
+func extractLastBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
+	var last []byte
+	var walkErr error
+
+	forEachRepeatedField(data, fieldNum, func(item []byte, err error) bool {
+		if err != nil {
+			walkErr = err
+			return false
+		}
+		last = item
+		return true
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return last, nil
 }
 
 // extractFixed64Field extracts the first occurrence of a fixed64 field from

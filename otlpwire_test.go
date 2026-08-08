@@ -1488,6 +1488,85 @@ func TestMetricName_Absent(t *testing.T) {
 	require.Nil(t, name)
 }
 
+// TestMetricName_LastValueWins covers the E-2942 change from first-match to
+// protobuf singular-scalar semantics. pdata assigns on each occurrence, so the
+// last one wins; the previous first-match behavior diverged.
+func TestMetricName_LastValueWins(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "first")
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendString(m, "1")
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "second")
+
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, "second", string(name))
+
+	// pdata is the oracle: wrap the metric into a full request and compare.
+	sm := protowire.AppendTag(nil, 2, protowire.BytesType)
+	sm = protowire.AppendVarint(sm, uint64(len(m)))
+	sm = append(sm, m...)
+	rm := protowire.AppendTag(nil, 2, protowire.BytesType)
+	rm = protowire.AppendVarint(rm, uint64(len(sm)))
+	rm = append(rm, sm...)
+
+	req := pmetricotlp.NewExportRequest()
+	require.NoError(t, req.UnmarshalProto(wrapAsRequest(rm)))
+	require.Equal(t, "second",
+		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name())
+}
+
+// TestMetricName_UnclosedGroupIsStricterThanPdata pins the one direction in
+// which the widened scan disagrees with pdata. protowire's field skip requires
+// a start-group to have its matching end-group; pdata's unknown-field skip
+// returns as soon as it consumes a non-group wire type, even inside an
+// unclosed group. So this payload is an error here and accepted there.
+//
+// The divergence is deliberate and in the safe direction (see the
+// "Instrumentation scope and schema URL" section of docs/specification.md).
+// Groups are proto2-only and OTLP never emits them. This test exists so the
+// behavior cannot change silently.
+func TestMetricName_UnclosedGroupIsStricterThanPdata(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "requests")
+	// Unknown field 8 as a start-group holding a fixed32, with no end-group.
+	m = protowire.AppendTag(m, 8, protowire.StartGroupType)
+	m = protowire.AppendTag(m, 6, protowire.Fixed32Type)
+	m = protowire.AppendFixed32(m, 0)
+
+	sm := protowire.AppendTag(nil, 2, protowire.BytesType)
+	sm = protowire.AppendVarint(sm, uint64(len(m)))
+	sm = append(sm, m...)
+	rm := protowire.AppendTag(nil, 2, protowire.BytesType)
+	rm = protowire.AppendVarint(rm, uint64(len(sm)))
+	rm = append(rm, sm...)
+
+	req := pmetricotlp.NewExportRequest()
+	require.NoError(t, req.UnmarshalProto(wrapAsRequest(rm)),
+		"pdata tolerates the unclosed group")
+	require.Equal(t, "requests",
+		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name())
+
+	_, err := m.Name()
+	require.Error(t, err, "otlp-wire rejects it: group validation is strict")
+}
+
+// TestMetricName_MalformedTrailingField pins the validation-scope consequence
+// of the full scan: corruption after the last name occurrence is now reported.
+func TestMetricName_MalformedTrailingField(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "requests")
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendVarint(m, 64) // declares more than it carries
+
+	_, err := m.Name()
+	require.Error(t, err)
+}
+
 // buildAllTypesMetrics builds one metric of each of the five types, each
 // with two datapoints carrying attributes {"method":"GET","status":"200"}
 // and timestamp 1000000000.

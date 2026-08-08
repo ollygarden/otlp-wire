@@ -102,7 +102,11 @@ See [example_test.go](example_test.go) for complete working examples.
 ```
 ExportMetricsServiceRequest (OTLP message bytes)
   └─ ResourceMetrics[] (one per resource)
+       ├─ Resource()   (exactly one, merged)
+       ├─ SchemaUrl()
        └─ ScopeMetrics[] (one per instrumentation scope)
+            ├─ Scope()      (exactly one, merged)
+            ├─ SchemaUrl()
             └─ Metric[] (individual metrics)
                  ├─ Name()
                  └─ DataPoint[] (one per data point, any metric type)
@@ -114,17 +118,30 @@ ExportMetricsServiceRequest (OTLP message bytes)
 
 ExportLogsServiceRequest (OTLP message bytes)
   └─ ResourceLogs[] (one per resource)
+       ├─ Resource()   (exactly one, merged)
+       ├─ SchemaUrl()
        └─ ScopeLogs[] (one per instrumentation scope)
+            ├─ Scope()      (exactly one, merged)
+            ├─ SchemaUrl()
             └─ LogRecord[]
                  └─ SeverityNumber()
 
 ExportTracesServiceRequest (OTLP message bytes)
   └─ ResourceSpans[] (one per resource)
+       ├─ Resource()   (exactly one, merged)
+       ├─ SchemaUrl()
        └─ ScopeSpans[] (one per instrumentation scope)
+            ├─ Scope()      (exactly one, merged)
+            ├─ SchemaUrl()
             └─ Span[] (individual spans)
                  ├─ TraceID()
                  ├─ SpanID()
                  └─ ParentSpanID()
+
+InstrumentationScope (from any Scope())
+  ├─ Name()
+  ├─ Version()
+  └─ KeyValue[] (attributes)
 ```
 
 ### Methods
@@ -149,25 +166,39 @@ func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], fu
 type ResourceMetrics []byte
 func (r ResourceMetrics) DataPointCount() (int, error)
 func (r ResourceMetrics) Resource() (Resource, error)
+func (r ResourceMetrics) SchemaUrl() ([]byte, error)
 func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error)
 
 type ResourceLogs []byte
 func (r ResourceLogs) LogRecordCount() (int, error)
 func (r ResourceLogs) Resource() (Resource, error)
+func (r ResourceLogs) SchemaUrl() ([]byte, error)
 func (r ResourceLogs) WriteTo(w io.Writer) (int64, error)
 func (r ResourceLogs) ScopeLogs() (iter.Seq[ScopeLogs], func() error)
 
 type ResourceSpans []byte
 func (r ResourceSpans) SpanCount() (int, error)
 func (r ResourceSpans) Resource() (Resource, error)
+func (r ResourceSpans) SchemaUrl() ([]byte, error)
 func (r ResourceSpans) WriteTo(w io.Writer) (int64, error)
 func (r ResourceSpans) ScopeSpans() (iter.Seq[ScopeSpans], func() error)
+```
+
+**Instrumentation scope (all three signals):**
+```go
+type InstrumentationScope []byte
+func (s InstrumentationScope) Name() ([]byte, error)
+func (s InstrumentationScope) Version() ([]byte, error)
+func (s InstrumentationScope) Attributes() (iter.Seq[KeyValue], func() error)
+func (s InstrumentationScope) AttributesSeq(yield func(KeyValue, error) bool)
 ```
 
 **Scope-level operations (traces):**
 ```go
 type ScopeSpans []byte
 func (s ScopeSpans) SpanCount() (int, error)
+func (s ScopeSpans) Scope() (InstrumentationScope, error)
+func (s ScopeSpans) SchemaUrl() ([]byte, error)
 func (s ScopeSpans) Spans() (iter.Seq[Span], func() error)
 ```
 
@@ -182,6 +213,8 @@ func (s Span) ParentSpanID() ([8]byte, error)
 **Scope- and metric-level operations (metrics depth):**
 ```go
 type ScopeMetrics []byte
+func (s ScopeMetrics) Scope() (InstrumentationScope, error)
+func (s ScopeMetrics) SchemaUrl() ([]byte, error)
 func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error)
 
 type Metric []byte
@@ -214,6 +247,8 @@ const (
 **Log-level operations and resource attributes:**
 ```go
 type ScopeLogs []byte
+func (s ScopeLogs) Scope() (InstrumentationScope, error)
+func (s ScopeLogs) SchemaUrl() ([]byte, error)
 func (s ScopeLogs) LogRecords() (iter.Seq[LogRecord], func() error) // ergonomic, 2 allocs per open
 func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) // zero-alloc, range directly
 
@@ -247,6 +282,28 @@ if err != nil {
 }
 value, found, err := resource.StringAttribute("service.name")
 ```
+
+Scope containers work the same way: `ScopeMetrics`, `ScopeLogs`, and
+`ScopeSpans` each have exactly one `InstrumentationScope`, reached with
+`Scope()`. It is absence-tolerant, zero-copy for the single occurrence real
+producers emit, and merges 2+ occurrences, exactly as `Resource()` does. Note
+that scope attributes are field 3 of `InstrumentationScope`, whereas resource
+attributes are field 1 — the accessors hide that difference:
+
+```go
+scope, err := scopeLogs.Scope()
+if err != nil {
+    return err
+}
+name, err := scope.Name()
+```
+
+**Repeated fields resolve two different ways**, matching protobuf and pdata:
+singular *messages* (`Resource()`, `Scope()`) merge, while singular *scalars*
+(`SchemaUrl()`, `InstrumentationScope.Name()` and `Version()`, `Metric.Name()`)
+resolve to the last occurrence. `KeyValue.Key` and `KeyValue.ValueRaw` are
+deliberately exempt and stay first-match for hashing hot paths.
+[docs/DESIGN.md](docs/DESIGN.md) explains why.
 
 `KeyValue.ValueRaw` remains a lightweight view of the first encoded AnyValue
 field for hashing-oriented hot paths. `KeyValue.StringValue` fully parses

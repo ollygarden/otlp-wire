@@ -347,7 +347,7 @@ func TestResourceStringAttribute_EntityRefPdataParity(t *testing.T) {
 // TestResourceLogsResource_MergedResourcesPdataParity covers the migration
 // path documented for the removed ResourceLogs.StringAttribute:
 // rl.Resource() then res.StringAttribute(key). ResourceLogs.Resource() merges
-// repeated singular Resource occurrences (see extractResourceMessage), and
+// repeated singular Resource occurrences (see extractMergedMessage), and
 // Resource.StringAttribute retains pdata's first-duplicate-key-wins behavior
 // over the merged bytes.
 func TestResourceLogsResource_MergedResourcesPdataParity(t *testing.T) {

@@ -32,6 +32,7 @@ ExportMetricsServiceRequest
 └── ResourceMetrics
     ├── Resource
     └── ScopeMetrics
+        ├── InstrumentationScope
         └── Metric
             └── DataPoint
                 └── KeyValue
@@ -40,17 +41,19 @@ ExportLogsServiceRequest
 └── ResourceLogs
     ├── Resource
     └── ScopeLogs
+        ├── InstrumentationScope
         └── LogRecord
 
 ExportTracesServiceRequest
 └── ResourceSpans
     ├── Resource
     └── ScopeSpans
+        ├── InstrumentationScope
         └── Span
 ```
 
-Request, resource, scope, record, span, metric, Resource and KeyValue types are
-named byte slices. They are cheap to construct and make zero-copy ownership
+Request, resource, scope, record, span, metric, Resource, InstrumentationScope
+and KeyValue types are named byte slices. They are cheap to construct and make zero-copy ownership
 visible. `DataPoint` is a small struct because it must retain the metric body
 type that identifies the body and determines its attribute layout.
 
@@ -61,8 +64,9 @@ Parsing composes a small set of helpers around
 
 - repeated-field counting;
 - repeated-field iteration;
-- length-delimited, fixed-width and scalar extraction;
-- resource extraction and re-wrapping;
+- length-delimited, fixed-width and scalar extraction, in first-match and
+  last-value-wins forms;
+- merged singular-message extraction and resource re-wrapping;
 - field skipping with matching-group validation;
 - bounded semantic parsing for KeyValue, AnyValue, Resource and LogRecord.
 
@@ -143,31 +147,49 @@ count spans, and extract the three fixed-width identifiers used by partial
 trace detectors. Identifier accessors return arrays to make the required width
 part of the Go type and reject incorrectly sized wire values.
 
-## Resource extraction and `WriteTo`
+## Singular field resolution
 
-Resource containers share the same outer protobuf shape across metrics, logs
-and traces: Resource is field 1, the repeated scope container is field 2, and
-the export request repeats resource containers in field 1.
+All six containers share one outer protobuf shape. In a resource container
+(`ResourceMetrics`/`ResourceLogs`/`ResourceSpans`) field 1 is the Resource;
+in a scope container (`ScopeMetrics`/`ScopeLogs`/`ScopeSpans`) field 1 is the
+InstrumentationScope. In both, field 2 repeats the children and field 3 is
+`schema_url`.
 
-The three `Resource()` methods therefore share one extractor,
-`extractResourceMessage`. Its contract, decided for E-2941:
+Protobuf resolves a repeated occurrence of a *singular* field two different
+ways, and pdata implements both, so otlp-wire must distinguish them:
 
-- **Absence is not an error.** OTLP declares the Resource field optional, and
-  pdata accepts a container without it, reporting an empty Resource. The
+- a singular **message** merges — pdata unmarshals every occurrence into the
+  same object, so contents accumulate;
+- a singular **scalar** is replaced — pdata assigns
+  (`orig.SchemaUrl = string(...)`), so the last occurrence wins.
+
+Getting this wrong is invisible on well-formed input from a normal producer
+and wrong on everything else, which is exactly the class of divergence E-2940
+exists to close.
+
+### Singular messages: merged (`Resource`, `InstrumentationScope`)
+
+The three `Resource()` and three `Scope()` methods share one extractor,
+`extractMergedMessage`. Its contract, decided for E-2941 and generalized to
+scope in E-2942:
+
+- **Absence is not an error.** OTLP declares both fields optional, and pdata
+  accepts a container without them, reporting an empty message. The
   extractor returns `(nil, nil)` for absence, matching the convention already
   used by `extractBytesField`, `extractFixed64Field`, and
   `extractFixedBytesField` elsewhere in `wire.go`. A malformed occurrence
   (wrong wire type, bad length) is still an error.
-- **Exactly one Resource, merged.** `ResourceMetrics`/`ResourceLogs`/
-  `ResourceSpans` have exactly one pdata-visible Resource, matching pdata's
-  object model. Protobuf merges repeated occurrences of a singular message
-  field, and pdata performs that merge, so `Resource()` does too instead of
-  returning only the first occurrence (the pre-E-2941 behavior).
-- **Zero-copy for the case that matters.** A single Resource occurrence is
-  what every real producer emits. That case returns a slice aliasing the
+- **Exactly one, merged.** Each container has exactly one pdata-visible
+  Resource or scope, matching pdata's object model. Protobuf merges repeated
+  occurrences of a singular message field, and pdata performs that merge, so
+  the accessors do too instead of returning only the first occurrence (the
+  pre-E-2941 behavior).
+- **Zero-copy for the case that matters.** A single occurrence is what every
+  real producer emits. That case returns a slice aliasing the
   input, with no allocation — this is a hard performance gate, verified by
-  `testing.AllocsPerRun` in `resource_test.go` and by
-  `BenchmarkResource_SingleOccurrence`. Two or more occurrences are merged by
+  `testing.AllocsPerRun` in `resource_test.go` and `scope_test.go` and by
+  `BenchmarkResource_SingleOccurrence` and `BenchmarkScope_SingleOccurrence`.
+  Two or more occurrences are merged by
   concatenating their encoded bodies into one new buffer. Concatenation was
   verified byte-equivalent to protobuf's field-by-field merge for singular
   message fields (distinct keys, duplicate keys, 3+ occurrences), so it
@@ -185,25 +207,61 @@ The three `Resource()` methods therefore share one extractor,
   the pdata fallback refuses. `validateMessageFraming` therefore walks each
   occurrence first. It is structural only and allocation-free, and it runs
   exclusively on the multi-occurrence path, so the single-occurrence hot path
-  keeps its measured cost. `TestResource_SplicedOccurrencesRejected` pins the
-  behavior against pdata; `TestResource_ValidOccurrencesStillMerge` guards
-  against it becoming over-strict.
+  keeps its measured cost. `TestResource_SplicedOccurrencesRejected` and
+  `TestScope_SplicedOccurrencesRejected` pin the behavior against pdata;
+  the `ValidOccurrencesStillMerge` tests guard against it becoming
+  over-strict.
 
-**Validation-scope change.** Finding every occurrence to merge correctly
-requires scanning the complete container, so `extractResourceMessage` can no
-longer return as soon as it finds the first Resource field the way the
-pre-E-2941 version did (and the way the other single-field extractors in
-`wire.go` still do for fields that do not merge). One consequence: a
-malformed field located *after* the last Resource occurrence in the container
-is now reported as an error, where the shallow, first-match extractor never
-reached it. This is an intentional, narrow expansion of validation scope for
-this one accessor — see the "Resources and attributes" section of
+### Singular scalars: last occurrence wins
+
+`SchemaUrl`, `InstrumentationScope.Name`, `InstrumentationScope.Version` and
+`Metric.Name` share `extractLastBytesField`. Because a later occurrence
+replaces an earlier one, the extractor cannot stop at the first match; it
+records the most recent occurrence and returns after the walk completes.
+
+`Metric.Name` returned the first occurrence before E-2942. That was a
+divergence from pdata of the same kind E-2941 fixed for `Resource()`, so it
+was corrected here rather than left to differ from the new accessors beside
+it.
+
+`KeyValue.Key` and `KeyValue.ValueRaw` keep first-match semantics via
+`extractBytesField`, and this is a known divergence rather than an
+application of the rule above. Both fields would resolve differently under
+it: pdata takes the last `KeyValue.key` (a scalar) and *merges* repeated
+`KeyValue.value` occurrences (a message, `orig.Value.UnmarshalProto` into the
+same AnyValue). So a KeyValue carrying two `value` occurrences resolves in
+pdata to the merged oneof result, while `ValueRaw` returns the first
+occurrence's bytes; and `Key` returns the first key where this package's own
+`parseKeyValue` — behind `StringValue` and `Resource.StringAttribute` —
+returns the last.
+
+They were left on first-match here because they are the per-attribute
+hashing views described under "Error and compatibility strategy", the
+library's hottest path, and changing them is a behavioral change to existing
+accessors that this change did not measure. Repeated occurrences of either
+field require a producer no consumer has been observed to run. The
+divergence is tracked for the specification-drift work rather than left
+implicit.
+
+**Validation-scope change.** Both resolutions need the complete message:
+merging must find every occurrence, and last-value-wins must reach the final
+one. Neither `extractMergedMessage` nor `extractLastBytesField` can return
+early the way `extractBytesField` still does. One consequence: a malformed
+field located *after* the last relevant occurrence is now reported as an
+error, where a shallow first-match extractor never reached it. This is an
+intentional, narrow expansion of validation scope for these accessors — see
+the "Resources and attributes" section of
 [specification.md](specification.md) — not a general change to the "iterators
-validate operation-scoped" contract. The added scan is cheap:
+validate operation-scoped" contract. Each skipped tag is cheap:
 `protowire.ConsumeFieldValue` on a length-delimited field only reads the
-length prefix and skips the body, so scanning the remaining top-level tags is
-O(1) per tag regardless of payload size, confirmed by
-`BenchmarkResource_SingleOccurrence` (see [BENCHMARKS.md](BENCHMARKS.md)).
+length prefix and jumps the body, so cost scales with the enclosing message's
+field count, not its payload size, and stays allocation-free. That matters
+more for scope containers than resource containers, because a scope container
+holds every record where a resource container holds a handful of scopes.
+[BENCHMARKS.md](BENCHMARKS.md) has the measured curve and what it costs a
+consumer that reads only the scope and stops early.
+
+### `WriteTo`
 
 The three `WriteTo` methods share one writer that prefixes the unchanged
 resource container with an export-request field tag and length. Direct
@@ -233,10 +291,10 @@ they do not need while giving routing and detector paths a parity-oriented API.
 ## Performance design
 
 Counting uses direct tag walks and remains allocation-free. Returned byte
-slices alias the input, with one documented exception: `Resource()` allocates
-a concatenated buffer when a container carries 2+ Resource occurrences (see
-"Resource extraction and WriteTo" above); the single-occurrence case every
-real producer emits stays zero-copy. Ordinary iterator cost is explicit and
+slices alias the input, with one documented exception: `Resource()` and
+`Scope()` allocate a concatenated buffer when a container carries 2+
+occurrences of that field (see "Singular field resolution" above); the
+single-occurrence case every real producer emits stays zero-copy. Ordinary iterator cost is explicit and
 amortized at outer levels; zero-allocation yield variants cover repeated
 inner levels.
 

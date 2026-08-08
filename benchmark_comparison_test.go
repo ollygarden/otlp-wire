@@ -2,11 +2,13 @@ package otlpwire
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -1054,5 +1056,204 @@ func BenchmarkResource_ScanScaling(b *testing.B) {
 				_, _ = rm.Resource()
 			}
 		})
+	}
+}
+
+// ========== Scope and schema_url (E-2942) ==========
+
+// scopeContainerWithRecords builds a ScopeLogs carrying one scope (field 1),
+// n log records (field 2), and a schema_url (field 3). The scope and
+// schema_url accessors must scan past every record to honor merge and
+// last-value-wins semantics, so this fixture exposes that cost.
+func scopeContainerWithRecords(n int) []byte {
+	scope := scopeMessage("checkout-instr", "1.2.3")
+	out := protowire.AppendTag(nil, 1, protowire.BytesType)
+	out = protowire.AppendVarint(out, uint64(len(scope)))
+	out = append(out, scope...)
+
+	// A valid, decodable LogRecord body of a pinned size. The accessors under
+	// test never look inside a record — they read its tag and length and step
+	// over it — but an undecodable filler would be a trap for anyone who later
+	// makes this fixture do more. 64 bytes matches containerWithScopes above,
+	// so the two scaling benchmarks stay comparable.
+	record := protowire.AppendTag(nil, 5, protowire.BytesType) // LogRecord.body
+	body := protowire.AppendTag(nil, 1, protowire.BytesType)   // AnyValue.string_value
+	body = protowire.AppendString(body, strings.Repeat("x", 60))
+	record = protowire.AppendVarint(record, uint64(len(body)))
+	record = append(record, body...)
+
+	for i := 0; i < n; i++ {
+		out = protowire.AppendTag(out, 2, protowire.BytesType)
+		out = protowire.AppendVarint(out, uint64(len(record)))
+		out = append(out, record...)
+	}
+
+	out = protowire.AppendTag(out, 3, protowire.BytesType)
+	return protowire.AppendString(out, "https://example.test/schema/v1")
+}
+
+// BenchmarkScope_SingleOccurrence is the hot path: one scope occurrence
+// returns a slice aliasing the input, with no allocation.
+func BenchmarkScope_SingleOccurrence(b *testing.B) {
+	sm := ScopeMetrics(scopeContainer(scopeMessage("checkout-instr", "1.2.3")))
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = sm.Scope()
+	}
+}
+
+// BenchmarkScope_MultipleOccurrences is the paired benchmark for the
+// documented exception: 2+ occurrences concatenate into a new buffer.
+func BenchmarkScope_MultipleOccurrences(b *testing.B) {
+	sm := ScopeMetrics(scopeContainer(
+		scopeMessage("checkout-instr", ""),
+		scopeMessage("", "1.2.3"),
+		scopeWithStringAttr("library.language", "go"),
+	))
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = sm.Scope()
+	}
+}
+
+// minimalScopeRequest builds an ExportLogsServiceRequest carrying exactly one
+// resource, one scope container and one populated scope, so the paired
+// benchmarks below compare scope access against decoding the same bytes.
+func minimalScopeRequest() []byte {
+	sc := scopeContainer(append(
+		scopeMessage("checkout-instr", "1.2.3"),
+		scopeWithStringAttr("library.language", "go")...))
+	return wrapAsRequest(resourceContainerWithScope(sc))
+}
+
+// BenchmarkScope_NameVersion_WireFormat reads scope name and version straight
+// from the wire. Paired with BenchmarkScope_NameVersion_Unmarshal.
+func BenchmarkScope_NameVersion_WireFormat(b *testing.B) {
+	payload := minimalScopeRequest()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		resources, resErr := ExportLogsServiceRequest(payload).ResourceLogs()
+		for rl := range resources {
+			scopes, scopeErr := rl.ScopeLogs()
+			for sl := range scopes {
+				scope, err := sl.Scope()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := scope.Name(); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := scope.Version(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := scopeErr(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := resErr(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkScope_NameVersion_Unmarshal is the full-decode baseline for the
+// same bytes. It stands in for the consumer code this API replaces (dibber
+// unmarshals a generated InstrumentationScope per scope; sage strict-parses
+// one per occurrence); it is not those implementations verbatim, since
+// replicating them would add a production proto module as a dependency.
+func BenchmarkScope_NameVersion_Unmarshal(b *testing.B) {
+	payload := minimalScopeRequest()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		req := plogotlp.NewExportRequest()
+		if err := req.UnmarshalProto(payload); err != nil {
+			b.Fatal(err)
+		}
+		logs := req.Logs()
+		for r := 0; r < logs.ResourceLogs().Len(); r++ {
+			rl := logs.ResourceLogs().At(r)
+			for s := 0; s < rl.ScopeLogs().Len(); s++ {
+				scope := rl.ScopeLogs().At(s).Scope()
+				_, _ = scope.Name(), scope.Version()
+			}
+		}
+	}
+}
+
+// BenchmarkScope_ScanScaling pins the complexity of Scope(): merging requires
+// scanning every top-level field, so cost grows with the record count rather
+// than staying constant. This matters more than the Resource equivalent
+// because a scope container holds records, not scopes. Backs the scaling
+// table in docs/BENCHMARKS.md.
+func BenchmarkScope_ScanScaling(b *testing.B) {
+	for _, records := range []int{1, 100, 1000} {
+		b.Run(fmt.Sprintf("records=%d", records), func(b *testing.B) {
+			sl := ScopeLogs(scopeContainerWithRecords(records))
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, _ = sl.Scope()
+			}
+		})
+	}
+}
+
+// BenchmarkSchemaUrl_ScanScaling pins the same cost for the scalar accessor,
+// which must reach the last occurrence and therefore cannot stop early.
+func BenchmarkSchemaUrl_ScanScaling(b *testing.B) {
+	for _, records := range []int{1, 100, 1000} {
+		b.Run(fmt.Sprintf("records=%d", records), func(b *testing.B) {
+			sl := ScopeLogs(scopeContainerWithRecords(records))
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, _ = sl.SchemaUrl()
+			}
+		})
+	}
+}
+
+// BenchmarkMetric_Name covers the accessor changed from first-match to
+// last-value-wins, which turned an early return into a full scan of the
+// metric's top-level fields. Compare against the same benchmark on main.
+func BenchmarkMetric_Name(b *testing.B) {
+	metrics := createScrapeShapedMetrics()
+	marshaler := &pmetric.ProtoMarshaler{}
+	payload, err := marshaler.MarshalMetrics(metrics)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		resources, resErr := ExportMetricsServiceRequest(payload).ResourceMetrics()
+		for rm := range resources {
+			scopes, scopeErr := rm.ScopeMetrics()
+			for sm := range scopes {
+				ms, mErr := sm.Metrics()
+				for m := range ms {
+					if _, err := m.Name(); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := mErr(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := scopeErr(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := resErr(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
