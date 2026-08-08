@@ -145,7 +145,7 @@ malformed body or attribute that `SeverityNumber` rejects on the same bytes,
 so a consumer reading both would see one succeed and one fail. Sharing the walk
 makes that impossible by construction.
 
-Threading the value out of the walk costs a measured ~1.3% on the
+Threading the value out of the walk costs a measured 2–3% on the
 severity-classification path with allocations unchanged
 ([BENCHMARKS.md](BENCHMARKS.md)), and a consumer reading both severity fields
 pays two walks, because each accessor runs the walk once. No combined accessor

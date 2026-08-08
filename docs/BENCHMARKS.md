@@ -597,10 +597,16 @@ does not interleave arms.
 records, no `severity_text` set, so this measures only the walk's added
 branching and return, not reading the new field.
 
+The "before" arm must be built from a checkout of the merge base, not from a
+stash — `git stash` on a clean worktree is a no-op and would build the same
+binary twice, measuring 0%:
+
 ```bash
-go test -c -o /tmp/after.test .          # this branch
-git -C <clean-worktree> stash && go test -c -o /tmp/before.test .   # merge base
-for round in $(seq 1 9); do
+go test -c -o /tmp/after.test .                    # this branch
+mkdir /tmp/base && git archive <merge-base> | tar -x -C /tmp/base
+(cd /tmp/base && go test -c -o /tmp/before.test .) # merge base
+
+for round in $(seq 1 15); do
   for arm in before after; do
     /tmp/$arm.test -test.run '^$' -test.benchtime 500ms \
       -test.bench '^BenchmarkLogs_SeverityClassification_WireFormat$'
@@ -608,15 +614,19 @@ for round in $(seq 1 9); do
 done
 ```
 
-| Revision | ns/op (median of 9) | B/op | allocs/op |
+| Revision | ns/op (median of 15) | B/op | allocs/op |
 |---|---:|---:|---:|
-| merge base | 78,874 | 488 | 15 |
-| this change | 80,233 | 488 | 15 |
+| merge base | 78,744 | 488 | 15 |
+| this change | 80,749 | 488 | 15 |
 
-**Median paired delta +1.29%, slower in 8 of 9 rounds**, allocations
-unchanged. The ranges overlap, so the sign consistency is the evidence, not
-the absolute numbers. One round measured +11.86% under transient machine load;
-it is included in the median rather than discarded.
+**Median paired delta +2.67%, slower in 14 of 15 rounds**, allocations
+unchanged. A second independent 15-round session on the same machine measured
++2.00%, slower in 12 of 15. Take the cost as roughly **+2 to +3%** rather than
+either figure exactly: single rounds range from −8.7% to +5.8% under desktop
+load, so the sign consistency across rounds is the evidence and the magnitude
+is only stable to about a percentage point. Nine rounds is not enough for a
+delta this size on this machine — it understated the median by roughly a
+percentage point against both 15-round sessions. Use 15 or more.
 
 This is the price of one walk instead of two implementations, and it is
 deliberate: see [DESIGN.md](DESIGN.md) for why drift between the two severity

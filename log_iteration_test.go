@@ -123,6 +123,19 @@ func TestLogRecordSeverityText_MatchesPdata(t *testing.T) {
 			expected: []byte("SECOND"),
 		},
 		{
+			// The case that separates last-value-wins from
+			// last-non-empty-wins: an implementation guarding the
+			// assignment on len(value) > 0 would return FIRST here.
+			name:     "repeated resolving to an empty last occurrence",
+			record:   append(severityText("FIRST"), severityText("")...),
+			expected: []byte{},
+		},
+		{
+			name:     "repeated resolving from an empty first occurrence",
+			record:   append(severityText(""), severityText("LAST")...),
+			expected: []byte("LAST"),
+		},
+		{
 			name:     "unknown fields around it are skipped",
 			record:   slices.Concat(unknownScalarFields(), severityText("WARN"), severityNumberField(plog.SeverityNumberWarn), unknownScalarFields()),
 			expected: []byte("WARN"),

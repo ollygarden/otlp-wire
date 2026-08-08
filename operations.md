@@ -22,7 +22,7 @@ this before releasing the module or changing a consumer rollout boundary.
 | Allocation regression | hypothesized | Higher GC/CPU in high-volume consumers | Extra copies, escaping closures, or full decode added to a hot path | Allocation tests and paired `-benchmem` benchmarks |
 | Consumer contract regression | observed in tests | Compile failure or changed routing/detector result after upgrade | Exported API, aliasing, iterator timing, or `WriteTo` bytes changed | Consumer-focused tests and canary comparison; the transitions below |
 | Benchmark-method error | observed | A performance claim or release decision rests on a delta that does not reproduce | A paired comparison run as sequential blocks (`go test -count=N`) instead of alternating invocations, or a gap claimed from overlapping ranges | Re-run alternating; see the release checklist below |
-| Accessor divergence on one message | hypothesized | Two accessors over the same message disagree on whether a payload is valid, so a consumer sees one field read succeed and the other fail on identical bytes | A second accessor added with its own parser instead of reading from the existing walk | Shared-walk implementation plus a malformed-parity test asserting both accessors fail together; see `TestLogRecordSeverityText_MalformedParity` |
+| Accessor divergence on one message | hypothesized | Two accessors over the same message disagree on whether a payload is valid, so a consumer sees one field read succeed and the other fail on identical bytes | A second accessor added with its own parser instead of reading from the existing walk | Shared-walk implementation plus a malformed-parity test asserting both accessors fail together; see `TestLogRecordSeverity_MalformedParity` |
 
 ### Known consumer-visible transitions in the API realignment
 
@@ -62,12 +62,23 @@ consequences when reading a consumer's CPU profile:
   counts. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the measured comparison
   against a shallow hand-rolled walk.
 
-**Known divergence:** the scanning LogRecord accessors accept a *well-formed*
-group in an unknown LogRecord field, where pdata rejects the same bytes with
-`unexpected EOF`. This is the mirror of the unclosed-group row above and is
-likewise reachable only on malformed or adversarial input. It matters to
-consumers that pair the wire path with a pdata fallback and expect the two to
-agree on validity. No test covers it.
+**Known divergences from pdata.** These matter only to consumers that pair the
+wire path with a pdata fallback and expect the two to agree on validity. All
+are reachable only on malformed or adversarial input, never on conformant OTLP
+from a normal producer, and none is specific to one accessor — they are
+properties of the shared LogRecord walk. No test covers them.
+
+| Input | Wire path | pdata |
+| --- | --- | --- |
+| Well-formed group in an unknown LogRecord field, or inside the body's `AnyValue` | accepts | rejects (`unexpected EOF`) |
+| Non-canonical 10-byte varint (10th byte ≥ 2), in any varint field including a `severity_text` length prefix | rejects | accepts |
+| Field number above `MaxInt32` whose `int32` truncation is positive | rejects (`malformed protobuf tag`) | accepts (truncates, then skips) |
+
+The first row is the mirror of the unclosed-group row above. The last two come
+from `protowire` being stricter than pdata's generated unmarshal: `protowire`
+enforces canonical varint encoding and rejects out-of-range field numbers,
+where the gogo-generated loop does neither. A consumer cannot conclude "pdata
+would also reject this" from a wire-path error, nor the reverse.
 
 ## Telemetry inventory
 
