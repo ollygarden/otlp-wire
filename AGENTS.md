@@ -95,6 +95,13 @@ for new accessors.
   generated unmarshal — merge appends, replacement assigns. Check the `.proto`
   declaration first: neither helper applies to a `repeated` field. See
   "Singular field resolution" in [docs/DESIGN.md](docs/DESIGN.md).
+- Before reaching for either helper, check whether an existing schema-aware
+  walk already covers that message — `parseLogRecordSeverity` for `LogRecord`,
+  for example. If one does, read the field out of that walk and apply the
+  resolution there instead of adding a second, shallower parser. Two parsers
+  over one message diverge on malformed input, so the accessors disagree about
+  whether the same bytes are valid; `LogRecord.SeverityText` exists in its
+  current shape for this reason.
 - Malformed tags, lengths, wire types, identifiers, metric bodies, or nested
   messages must return parse errors. Never silently accept corruption to keep
   an iterator moving.

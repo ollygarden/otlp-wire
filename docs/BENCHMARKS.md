@@ -576,3 +576,107 @@ paired median (between +3% and +6.5% across runs) and the sign, which held in
 12 of 12 rounds above. The cost is `forEachRepeatedField`'s capacity clamp plus
 one indirect call per element; the clamp is the guarantee a caller's `append`
 cannot reach the neighbouring entry, which the hand-rolled walk lacks.
+
+## `LogRecord.SeverityText` (E-2944)
+
+`SeverityText` reads `severity_text` out of the same schema-aware walk
+`SeverityNumber` already used, rather than getting its own extractor. Two
+measurements matter: what that shared walk costs the existing `SeverityNumber`
+hot path, and how the new accessor compares to the shallow walk sage
+hand-rolls today.
+
+**Environment:** 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz, linux/amd64,
+Go 1.25.12, developer desktop. Both comparisons alternate single-arm
+invocations of prebuilt binaries and report the median of the paired per-round
+deltas; `go test -count=N` runs a benchmark's iterations consecutively and
+does not interleave arms.
+
+### Cost to the existing `SeverityNumber` path
+
+**Fixture:** `createSeverityClassificationBenchLogs` — 5 resources × 120
+records, no `severity_text` set, so this measures only the walk's added
+branching and return, not reading the new field.
+
+The "before" arm must be built from a checkout of the merge base, not from a
+stash — `git stash` on a clean worktree is a no-op and would build the same
+binary twice, measuring 0%:
+
+```bash
+go test -c -o /tmp/after.test .                    # this branch
+mkdir /tmp/base && git archive <merge-base> | tar -x -C /tmp/base
+(cd /tmp/base && go test -c -o /tmp/before.test .) # merge base
+
+for round in $(seq 1 15); do
+  for arm in before after; do
+    /tmp/$arm.test -test.run '^$' -test.benchtime 500ms \
+      -test.bench '^BenchmarkLogs_SeverityClassification_WireFormat$'
+  done
+done
+```
+
+| Revision | ns/op (median of 15) | B/op | allocs/op |
+|---|---:|---:|---:|
+| merge base | 78,744 | 488 | 15 |
+| this change | 80,749 | 488 | 15 |
+
+**Median paired delta +2.67%, slower in 14 of 15 rounds**, allocations
+unchanged. A second independent 15-round session on the same machine measured
++2.00%, slower in 12 of 15. Take the cost as roughly **+2 to +3%** rather than
+either figure exactly: single rounds range from −8.7% to +5.8% under desktop
+load, so the sign consistency across rounds is the evidence and the magnitude
+is only stable to about a percentage point. Nine rounds is not enough for a
+delta this size on this machine — it understated the median by roughly a
+percentage point against both 15-round sessions. Use 15 or more.
+
+This is the price of one walk instead of two implementations, and it is
+deliberate: see [DESIGN.md](DESIGN.md) for why drift between the two severity
+accessors is the failure being bought out.
+
+### Against sage's hand-rolled walk
+
+**Fixture:** `createBenchLogs` — 5 resources × 100 records, each with a body,
+a timestamp, two attributes, a severity number and `severity_text`.
+
+`logRecordSeverityTextHandRolled` is sage's `internal/event/wire.go` walk
+copied verbatim so the comparison reproduces from this repository alone. The
+arms are **not** equivalent work: sage's stops at field 3 and steps over the
+body and attributes without descending, then materializes a `string`;
+`SeverityText` validates every known LogRecord field — including parsing the
+body's `AnyValue` and every attribute `KeyValue` — and returns a view.
+
+```bash
+go test -c -o /tmp/otlpwire.test .
+for round in $(seq 1 9); do
+  for arm in _HandRolled ''; do
+    /tmp/otlpwire.test -test.run '^$' -test.benchmem -test.benchtime=3000x \
+      -test.bench "^BenchmarkLogRecord_SeverityText${arm}\$"
+  done
+done
+```
+
+| Benchmark | ns/op (median of 9) | B/op | allocs/op |
+|---|---:|---:|---:|
+| `BenchmarkLogRecord_SeverityText_HandRolled` | 40,215 | 2,368 | 514 |
+| `BenchmarkLogRecord_SeverityText` | 69,185 | 368 | 14 |
+
+**About 72% slower and 500 allocations cheaper per batch**, slower in 9 of 9
+rounds. Both directions are real and neither is noise:
+
+- The CPU cost is the schema-aware validation. It is what makes `SeverityText`
+  and `SeverityNumber` accept and reject identical bytes; the hand-rolled walk
+  cannot make that promise, because it never looks at the body or attributes.
+- The allocation saving is the returned view. sage's walk allocates one string
+  per record — 500 in this fixture — where the accessor aliases the request
+  buffer with a clamped capacity.
+
+A consumer on a GC-sensitive ingest path is trading CPU for allocations here,
+not simply losing. A consumer that wants the cheap shallow read and does not
+need `SeverityNumber` parity is better served by its own walk, and should say
+so on the migration issue rather than adopting this accessor by default.
+
+Reading both severity fields runs the walk twice. No combined accessor exists;
+the trigger for adding one is sage adopting `SeverityText` and reading both
+fields per record.
+
+Drop the hand-rolled arm and this subsection once sage moves to
+`LogRecord.SeverityText`.

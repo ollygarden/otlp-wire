@@ -138,9 +138,7 @@ func ExampleMetric_DataPoints() {
 }
 
 // ExampleMetric_Metadata reads the metadata a receiver attaches to a metric.
-// It is a repeated field, so occurrences are yielded in wire order, duplicate
-// keys included. MetadataSeq is the zero-allocation variant to reach for when
-// a hot path combines metadata with every data point's attributes.
+// MetadataSeq is the zero-allocation variant for hot paths.
 func ExampleMetric_Metadata() {
 	metrics := pmetric.NewMetrics()
 	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
@@ -165,9 +163,6 @@ func ExampleMetric_Metadata() {
 	// http.server.duration prometheus.unit=seconds
 }
 
-// printMetricMetadata prints every metric's metadata, keeping the example body
-// free of the error checks the lazy accessors require: each can fail, and
-// every iterator's error closure must be checked after its range.
 func printMetricMetadata(data []byte) error {
 	resources, resourcesErr := otlpwire.ExportMetricsServiceRequest(data).ResourceMetrics()
 	for rm := range resources {
@@ -266,6 +261,88 @@ func ExampleResourceLogs_Resource() {
 	}
 
 	// Output: checkout severity=13
+}
+
+// ExampleLogRecord_SeverityText reads both severity fields together, which is
+// what a severity gate needs: the number orders records, the text carries the
+// producer's own label. SeverityText returns a view into the request buffer,
+// and nil distinguishes an absent severity_text from a present empty one.
+func ExampleLogRecord_SeverityText() {
+	logs := plog.NewLogs()
+	records := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords()
+	labelled := records.AppendEmpty()
+	labelled.SetSeverityNumber(plog.SeverityNumberError)
+	labelled.SetSeverityText("ERR")
+	records.AppendEmpty().SetSeverityNumber(plog.SeverityNumberInfo)
+
+	data, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if err := printLogSeverities(data); err != nil {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// severity=17 text=ERR
+	// severity=9 text=<unset>
+}
+
+func printLogSeverities(data []byte) error {
+	resources, resourcesErr := otlpwire.ExportLogsServiceRequest(data).ResourceLogs()
+	var failure error
+	for resourceLogs := range resources {
+		if failure = printResourceLogSeverities(resourceLogs); failure != nil {
+			break
+		}
+	}
+	// The error closure must be checked even when the loop exited early,
+	// so the split into one function per level is the point of this shape,
+	// not incidental.
+	if err := resourcesErr(); err != nil {
+		return err
+	}
+	return failure
+}
+
+func printResourceLogSeverities(resourceLogs otlpwire.ResourceLogs) error {
+	scopes, scopesErr := resourceLogs.ScopeLogs()
+	var failure error
+	for scope := range scopes {
+		if failure = printScopeLogSeverities(scope); failure != nil {
+			break
+		}
+	}
+	if err := scopesErr(); err != nil {
+		return err
+	}
+	return failure
+}
+
+// printScopeLogSeverities needs no closure check: LogRecordsSeq yields its
+// errors inline rather than deferring them.
+func printScopeLogSeverities(scope otlpwire.ScopeLogs) error {
+	for record, err := range scope.LogRecordsSeq {
+		if err != nil {
+			return err
+		}
+		number, err := record.SeverityNumber()
+		if err != nil {
+			return err
+		}
+		text, err := record.SeverityText()
+		if err != nil {
+			return err
+		}
+		if text == nil {
+			fmt.Printf("severity=%d text=<unset>\n", number)
+			continue
+		}
+		fmt.Printf("severity=%d text=%s\n", number, text)
+	}
+	return nil
 }
 
 // ExampleScopeLogs_Scope reads instrumentation scope identity and schema URL
