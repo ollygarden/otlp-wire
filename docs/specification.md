@@ -48,7 +48,7 @@ The library supports the following operation families:
 | Extract raw Resource bytes | yes | yes | yes |
 | Re-wrap one resource container as an export request | yes | yes | yes |
 | Iterate below the resource container | scopes, metrics, data points, attributes | scopes, log records | scopes, spans |
-| Selected field access | metric name, data-point type/timestamp/attributes, KeyValue fields | severity number, resource string attributes | trace, span and parent-span IDs |
+| Selected field access | metric name, data-point type/timestamp/attributes, KeyValue fields | severity number and text, resource string attributes | trace, span and parent-span IDs |
 
 ### Non-goals
 
@@ -367,6 +367,18 @@ the enum as `int32`, and applies protobuf last-scalar-value behavior. It scans
 and validates the complete LogRecord fields known to the pinned pdata schema,
 including nested body and attributes, while skipping well-formed unknown
 fields.
+
+`LogRecord.SeverityText` returns `severity_text` (field 3) as raw bytes
+aliasing the request buffer, with the capacity clamped so a caller's `append`
+cannot overwrite adjacent record fields. It returns `nil` when the field is
+absent and a non-nil zero-length slice when it is present but empty, a
+distinction pdata cannot represent; both compare equal to `""`. Repeated
+occurrences resolve to the last one, as protobuf and pdata do for a singular
+scalar.
+
+Both severity accessors read from one schema-aware walk of the whole
+LogRecord, so they accept and reject exactly the same bytes. Each call runs
+that walk once, so a consumer reading both fields pays for two.
 
 The library does not classify severity bands or combine severity number with
 severity text. That remains consumer policy.

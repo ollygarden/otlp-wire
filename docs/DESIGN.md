@@ -138,6 +138,26 @@ the whole known LogRecord structure so an early severity field cannot hide
 trailing corruption, and it implements protobuf last-value-wins scalar
 semantics.
 
+`SeverityText` (field 3) reads out of that same walk rather than getting its
+own extractor. Two independent parsers over one message is how the accessors
+drift: the shallow field-3 walk a consumer would otherwise hand-roll accepts a
+malformed body or attribute that `SeverityNumber` rejects on the same bytes,
+so a consumer reading both would see one succeed and one fail. Sharing the walk
+makes that impossible by construction.
+
+Threading the value out of the walk costs a measured ~1.3% on the
+severity-classification path with allocations unchanged
+([BENCHMARKS.md](BENCHMARKS.md)), and a consumer reading both severity fields
+pays two walks, because each accessor runs the walk once. No combined accessor
+exists. The walk already produces both values, so exposing the pair would need
+no new machinery — but per the flattened-convenience rule in E-2940 a
+convenience needs a measured hot path, and the concrete trigger is sage
+adopting `SeverityText` and reading both fields per record.
+
+Severity *classification* stays out of the library. Bands and number/text
+precedence are consumer policy, and nothing in the consumer audit argues
+otherwise.
+
 Resource context comes from `ResourceLogs.Resource()`, which merges every
 Resource occurrence for this container (see "Resource extraction" below) so
 callers get pdata-compatible resource attributes without a bespoke
@@ -176,6 +196,18 @@ ways, and pdata implements both, so otlp-wire must distinguish them:
 Getting this wrong is invisible on well-formed input from a normal producer
 and wrong on everything else, which is exactly the class of divergence E-2940
 exists to close.
+
+**Which resolution, and which parser, are separate decisions.** The rule above
+picks the *resolution*. It does not follow that a scalar gets its own call to
+`extractLastBytesField`: when the field already falls inside an existing
+schema-aware walk of the same message, the accessor reads out of that walk
+instead, applying the same last-value-wins resolution there. Adding a second,
+shallower parser over a message the library already walks is how two accessors
+come to disagree about whether the same bytes are valid — the divergence risk
+recorded in [operations.md](../operations.md). `LogRecord.SeverityText` is the
+worked example: field 3 is a singular scalar, but `parseLogRecordSeverity`
+already validates the whole LogRecord for `SeverityNumber`, so `SeverityText`
+reads from there rather than scanning independently.
 
 ### Singular messages: merged (`Resource`, `InstrumentationScope`)
 
@@ -291,9 +323,10 @@ There are two intentional semantic levels:
 
 - lightweight field views such as `KeyValue.Key` and `ValueRaw`, which return
   the first matching encoded field;
-- semantic accessors such as `StringValue`, `Resource.StringAttribute` and
-  `SeverityNumber`, which scan enough of the complete message to reproduce the
-  documented protobuf/pdata behavior and expose trailing corruption.
+- semantic accessors such as `StringValue`, `Resource.StringAttribute`,
+  `SeverityNumber` and `SeverityText`, which scan enough of the complete
+  message to reproduce the documented protobuf/pdata behavior and expose
+  trailing corruption.
 
 Keeping those levels separate prevents hashing paths from paying for semantics
 they do not need while giving routing and detector paths a parity-oriented API.

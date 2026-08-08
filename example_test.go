@@ -263,6 +263,64 @@ func ExampleResourceLogs_Resource() {
 	// Output: checkout severity=13
 }
 
+// ExampleLogRecord_SeverityText reads both severity fields together, which is
+// what a severity gate needs: the number orders records, the text carries the
+// producer's own label. SeverityText returns a view into the request buffer,
+// and nil distinguishes an absent severity_text from a present empty one.
+func ExampleLogRecord_SeverityText() {
+	logs := plog.NewLogs()
+	records := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords()
+	labelled := records.AppendEmpty()
+	labelled.SetSeverityNumber(plog.SeverityNumberError)
+	labelled.SetSeverityText("ERR")
+	records.AppendEmpty().SetSeverityNumber(plog.SeverityNumberInfo)
+
+	data, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if err := printLogSeverities(data); err != nil {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// severity=17 text=ERR
+	// severity=9 text=<unset>
+}
+
+func printLogSeverities(data []byte) error {
+	resources, resourcesErr := otlpwire.ExportLogsServiceRequest(data).ResourceLogs()
+	for resourceLogs := range resources {
+		scopes, scopesErr := resourceLogs.ScopeLogs()
+		for scope := range scopes {
+			for record, err := range scope.LogRecordsSeq {
+				if err != nil {
+					return err
+				}
+				number, err := record.SeverityNumber()
+				if err != nil {
+					return err
+				}
+				text, err := record.SeverityText()
+				if err != nil {
+					return err
+				}
+				if text == nil {
+					fmt.Printf("severity=%d text=<unset>\n", number)
+					continue
+				}
+				fmt.Printf("severity=%d text=%s\n", number, text)
+			}
+		}
+		if err := scopesErr(); err != nil {
+			return err
+		}
+	}
+	return resourcesErr()
+}
+
 // ExampleScopeLogs_Scope reads instrumentation scope identity and schema URL
 // without unmarshaling the request. Each scope container has exactly one
 // InstrumentationScope, mirroring pdata's object model.

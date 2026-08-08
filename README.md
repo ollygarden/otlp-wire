@@ -124,7 +124,8 @@ ExportLogsServiceRequest (OTLP message bytes)
             ├─ Scope()      (exactly one, merged)
             ├─ SchemaUrl()
             └─ LogRecord[]
-                 └─ SeverityNumber()
+                 ├─ SeverityNumber()
+                 └─ SeverityText()
 
 ExportTracesServiceRequest (OTLP message bytes)
   └─ ResourceSpans[] (one per resource)
@@ -256,12 +257,19 @@ func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) // zero-allo
 
 type LogRecord []byte
 func (r LogRecord) SeverityNumber() (int32, error)
+func (r LogRecord) SeverityText() ([]byte, error)
 
 type Resource []byte
 func (r Resource) Attributes() (iter.Seq[KeyValue], func() error)
 func (r Resource) AttributesSeq(yield func(KeyValue, error) bool)
 func (r Resource) StringAttribute(key string) ([]byte, bool, error)
 ```
+
+`LogRecord.SeverityText` returns raw bytes aliasing the request buffer, and
+`nil` when `severity_text` is absent, which distinguishes an absent field from
+a present empty one. It shares `SeverityNumber`'s schema-aware walk of the
+whole LogRecord, so reading both fields costs two walks; see
+[docs/DESIGN.md](docs/DESIGN.md) for why they share one parser.
 
 `Resource.StringAttribute` is zero-copy and returns a separate `found` value,
 so a missing resource attribute can be distinguished from a present empty

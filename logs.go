@@ -114,7 +114,21 @@ func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) {
 // that unexpected negative protobuf enum values remain distinguishable from
 // the positive OTLP severity ranges.
 func (r LogRecord) SeverityNumber() (int32, error) {
-	return parseLogRecordSeverity([]byte(r))
+	number, _, err := parseLogRecordSeverity([]byte(r))
+	return number, err
+}
+
+// SeverityText returns the LogRecord severity_text (field 3) as a view into
+// the underlying buffer. It returns nil when the field is absent and a
+// non-nil zero-length slice when it is present but empty, which pdata cannot
+// distinguish. Repeated occurrences resolve to the last one.
+//
+// Validation matches SeverityNumber: both read the same schema-aware walk of
+// the whole LogRecord, so an early severity_text cannot conceal corruption
+// that follows it.
+func (r LogRecord) SeverityText() ([]byte, error) {
+	_, text, err := parseLogRecordSeverity([]byte(r))
+	return text, err
 }
 
 // countLogRecords counts the number of log records in an OTLP
@@ -139,115 +153,123 @@ func countInScopeLogs(data []byte) (int, error) {
 }
 
 // parseLogRecordSeverity validates every known LogRecord field in pdata v1.64.0
-// while extracting severity_number with protobuf last-scalar-value semantics.
-// This is intentionally schema-aware: an early valid severity cannot conceal a
-// malformed body, attribute, timestamp, identifier, or trailing known field.
-func parseLogRecordSeverity(data []byte) (int32, error) {
+// while extracting severity_number and severity_text with protobuf
+// last-value-wins scalar semantics. This is intentionally schema-aware: an
+// early valid severity cannot conceal a malformed body, attribute, timestamp,
+// identifier, or trailing known field. Both severity accessors share the walk
+// so neither can drift from the other's malformed-input behavior.
+func parseLogRecordSeverity(data []byte) (int32, []byte, error) {
 	pos := 0
-	var result int32
+	var number int32
+	var text []byte
 
 	for pos < len(data) {
 		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
 		if tagLen < 0 {
-			return 0, errors.New("malformed protobuf tag")
+			return 0, nil, errors.New("malformed protobuf tag")
 		}
 		pos += tagLen
 
 		switch num {
 		case 1, 11: // time_unix_nano, observed_time_unix_nano
 			if wireType != protowire.Fixed64Type {
-				return 0, errors.New("wrong wire type for log record timestamp")
+				return 0, nil, errors.New("wrong wire type for log record timestamp")
 			}
 			_, n := protowire.ConsumeFixed64(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid fixed64 in log record timestamp")
+				return 0, nil, errors.New("invalid fixed64 in log record timestamp")
 			}
 			pos += n
 		case 2: // severity_number
 			if wireType != protowire.VarintType {
-				return 0, errors.New("wrong wire type for log record severity number")
+				return 0, nil, errors.New("wrong wire type for log record severity number")
 			}
 			value, n := protowire.ConsumeVarint(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid varint in log record severity number")
+				return 0, nil, errors.New("invalid varint in log record severity number")
 			}
-			result = int32(value)
+			number = int32(value)
 			pos += n
 		case 3, 12: // severity_text, event_name
 			if wireType != protowire.BytesType {
-				return 0, errors.New("wrong wire type for log record string")
+				return 0, nil, errors.New("wrong wire type for log record string")
 			}
-			_, n := protowire.ConsumeBytes(data[pos:])
+			value, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid bytes in log record string")
+				return 0, nil, errors.New("invalid bytes in log record string")
+			}
+			if num == 3 {
+				// Clamped so a caller's append reallocates instead of
+				// overwriting the record fields that follow this one.
+				text = value[:len(value):len(value)]
 			}
 			pos += n
 		case 5: // body
 			if wireType != protowire.BytesType {
-				return 0, errors.New("wrong wire type for log record body")
+				return 0, nil, errors.New("wrong wire type for log record body")
 			}
 			body, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid bytes in log record body")
+				return 0, nil, errors.New("invalid bytes in log record body")
 			}
 			if err := parseAnyValue(body, &parsedAnyValue{}); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			pos += n
 		case 6: // attributes
 			if wireType != protowire.BytesType {
-				return 0, errors.New("wrong wire type for log record attributes")
+				return 0, nil, errors.New("wrong wire type for log record attributes")
 			}
 			attribute, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid bytes in log record attributes")
+				return 0, nil, errors.New("invalid bytes in log record attributes")
 			}
 			if _, _, _, err := parseKeyValue(attribute); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			pos += n
 		case 7: // dropped_attributes_count
 			if wireType != protowire.VarintType {
-				return 0, errors.New("wrong wire type for log record dropped attributes count")
+				return 0, nil, errors.New("wrong wire type for log record dropped attributes count")
 			}
 			_, n := protowire.ConsumeVarint(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid varint in log record dropped attributes count")
+				return 0, nil, errors.New("invalid varint in log record dropped attributes count")
 			}
 			pos += n
 		case 8: // flags
 			if wireType != protowire.Fixed32Type {
-				return 0, errors.New("wrong wire type for log record flags")
+				return 0, nil, errors.New("wrong wire type for log record flags")
 			}
 			_, n := protowire.ConsumeFixed32(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid fixed32 in log record flags")
+				return 0, nil, errors.New("invalid fixed32 in log record flags")
 			}
 			pos += n
 		case 9, 10: // trace_id, span_id
 			if wireType != protowire.BytesType {
-				return 0, errors.New("wrong wire type for log record identifier")
+				return 0, nil, errors.New("wrong wire type for log record identifier")
 			}
 			identifier, n := protowire.ConsumeBytes(data[pos:])
 			if n < 0 {
-				return 0, errors.New("invalid bytes in log record identifier")
+				return 0, nil, errors.New("invalid bytes in log record identifier")
 			}
 			expectedSize := 16
 			if num == 10 {
 				expectedSize = 8
 			}
 			if len(identifier) != 0 && len(identifier) != expectedSize {
-				return 0, errors.New("log record identifier has unexpected size")
+				return 0, nil, errors.New("log record identifier has unexpected size")
 			}
 			pos += n
 		default:
 			n := skipField(data[pos:], num, wireType)
 			if n < 0 {
-				return 0, errors.New("failed to skip field in log record")
+				return 0, nil, errors.New("failed to skip field in log record")
 			}
 			pos += n
 		}
 	}
 
-	return result, nil
+	return number, text, nil
 }

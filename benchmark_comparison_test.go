@@ -1404,3 +1404,113 @@ func BenchmarkMetric_Metadata_Seq(b *testing.B) {
 		})
 	}
 }
+
+// ========== LogRecord.SeverityText ==========
+
+// benchSeverityTextSink prevents the severity-text arms from being optimized
+// away.
+var benchSeverityTextSink int
+
+// logRecordSeverityTextHandRolled is the field-3 walk sage hand-rolls in
+// internal/event/wire.go, copied verbatim as the "before" arm so the
+// comparison reproduces from this repository alone. It is deliberately not
+// equivalent work: it stops at field 3 and materializes a string, where
+// LogRecord.SeverityText validates every known LogRecord field and returns a
+// view. Drop this arm and its docs/BENCHMARKS.md section once sage moves to
+// LogRecord.SeverityText.
+func logRecordSeverityTextHandRolled(data []byte) (string, error) {
+	var text []byte
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return "", errors.New("malformed protobuf tag in log record")
+		}
+		data = data[n:]
+		if num == 3 {
+			if typ != protowire.BytesType {
+				return "", errors.New("wrong wire type for severity_text")
+			}
+			value, m := protowire.ConsumeBytes(data)
+			if m < 0 {
+				return "", errors.New("malformed severity_text field")
+			}
+			text = value
+			data = data[m:]
+			continue
+		}
+		n = protowire.ConsumeFieldValue(num, typ, data)
+		if n < 0 {
+			return "", errors.New("malformed field in log record")
+		}
+		data = data[n:]
+	}
+	return string(text), nil
+}
+
+func benchSeverityTextPayload(b *testing.B) []byte {
+	b.Helper()
+	payload, err := (&plog.ProtoMarshaler{}).MarshalLogs(createBenchLogs())
+	require.NoError(b, err)
+	return payload
+}
+
+// forEachBenchLogRecord walks down to every LogRecord so the arms differ only
+// in how they read severity_text. Keep the arms as separate functions:
+// dispatching through a func value defeats inlining and changes what is
+// measured.
+func forEachBenchLogRecord(b *testing.B, payload []byte, fn func(LogRecord)) {
+	resources, resErr := ExportLogsServiceRequest(payload).ResourceLogs()
+	for rl := range resources {
+		scopes, scopeErr := rl.ScopeLogs()
+		for sl := range scopes {
+			for record, err := range sl.LogRecordsSeq {
+				if err != nil {
+					b.Fatal(err)
+				}
+				fn(record)
+			}
+		}
+		if err := scopeErr(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := resErr(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkLogRecord_SeverityText_HandRolled(b *testing.B) {
+	payload := benchSeverityTextPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		total := 0
+		forEachBenchLogRecord(b, payload, func(record LogRecord) {
+			text, err := logRecordSeverityTextHandRolled([]byte(record))
+			if err != nil {
+				b.Fatal(err)
+			}
+			total += len(text)
+		})
+		benchSeverityTextSink = total
+	}
+}
+
+func BenchmarkLogRecord_SeverityText(b *testing.B) {
+	payload := benchSeverityTextPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		total := 0
+		forEachBenchLogRecord(b, payload, func(record LogRecord) {
+			text, err := record.SeverityText()
+			if err != nil {
+				b.Fatal(err)
+			}
+			total += len(text)
+		})
+		benchSeverityTextSink = total
+	}
+}

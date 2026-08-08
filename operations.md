@@ -22,6 +22,7 @@ this before releasing the module or changing a consumer rollout boundary.
 | Allocation regression | hypothesized | Higher GC/CPU in high-volume consumers | Extra copies, escaping closures, or full decode added to a hot path | Allocation tests and paired `-benchmem` benchmarks |
 | Consumer contract regression | observed in tests | Compile failure or changed routing/detector result after upgrade | Exported API, aliasing, iterator timing, or `WriteTo` bytes changed | Consumer-focused tests and canary comparison; the transitions below |
 | Benchmark-method error | observed | A performance claim or release decision rests on a delta that does not reproduce | A paired comparison run as sequential blocks (`go test -count=N`) instead of alternating invocations, or a gap claimed from overlapping ranges | Re-run alternating; see the release checklist below |
+| Accessor divergence on one message | hypothesized | Two accessors over the same message disagree on whether a payload is valid, so a consumer sees one field read succeed and the other fail on identical bytes | A second accessor added with its own parser instead of reading from the existing walk | Shared-walk implementation plus a malformed-parity test asserting both accessors fail together; see `TestLogRecordSeverityText_MalformedParity` |
 
 ### Known consumer-visible transitions in the API realignment
 
@@ -44,6 +45,29 @@ The canary decision and its measured pre/post comparison are recorded at
 release time, per "Release and production analysis" below. Confirm the canary
 consumer's telemetry is version-attributed first: see the uncovered-scenario
 note under "Telemetry inventory" below.
+
+### Diagnosing the LogRecord severity accessors
+
+`SeverityNumber` and `SeverityText` share one schema-aware walk of the whole
+LogRecord, so they can never disagree about whether a record is valid. Two
+consequences when reading a consumer's CPU profile:
+
+- **Each call walks the record once.** A consumer reading both fields pays two
+  walks. A severity path showing roughly double the expected parse cost is
+  usually this, not a regression.
+- **The walk descends into the body and every attribute.** Cost tracks record
+  contents, not just field count, unlike the shallow field-scan accessors. A
+  consumer whose records carry large bodies or many attributes pays more per
+  severity read than one whose records are bare, even at identical record
+  counts. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the measured comparison
+  against a shallow hand-rolled walk.
+
+**Known divergence:** the scanning LogRecord accessors accept a *well-formed*
+group in an unknown LogRecord field, where pdata rejects the same bytes with
+`unexpected EOF`. This is the mirror of the unclosed-group row above and is
+likewise reachable only on malformed or adversarial input. It matters to
+consumers that pair the wire path with a pdata fallback and expect the two to
+agree on validity. No test covers it.
 
 ## Telemetry inventory
 
