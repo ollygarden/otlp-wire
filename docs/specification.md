@@ -48,7 +48,7 @@ The library supports the following operation families:
 | Extract raw Resource bytes | yes | yes | yes |
 | Re-wrap one resource container as an export request | yes | yes | yes |
 | Iterate below the resource container | scopes, metrics, data points, attributes | scopes, log records | scopes, spans |
-| Selected field access | metric name, data-point type/timestamp/attributes, KeyValue fields | severity number and text, resource string attributes | trace, span and parent-span IDs |
+| Selected field access | metric name, metric metadata, data-point type/timestamp/attributes, KeyValue fields | severity number and text, resource string attributes | span identifiers, name, kind and timings |
 
 ### Non-goals
 
@@ -387,7 +387,37 @@ severity text. That remains consumer policy.
 
 Trace traversal exposes scopes and spans. `TraceID`, `SpanID`, and
 `ParentSpanID` return fixed-width arrays, return the zero value when the field
-is absent, and reject malformed or incorrectly sized identifiers.
+is absent, and reject malformed or incorrectly sized identifiers. An empty
+identifier occurrence assigns the zero value rather than being ignored, as
+pdata's `UnmarshalProto` does.
+
+`Span.Name` returns `name` (field 5) as raw bytes aliasing the request buffer,
+with the capacity clamped so a caller's `append` cannot overwrite adjacent
+span fields. It returns `nil` when the field is absent and a non-nil
+zero-length slice when it is present but empty, a distinction pdata cannot
+represent. The name is not checked for UTF-8 validity: pdata accepts an
+invalid-UTF-8 span name, so rejecting one here would make the wire path
+stricter than the path it mirrors, and that check remains consumer policy.
+
+`Span.Kind` returns the `kind` enum (field 6) as `int32`, keeping an
+unexpected negative value distinguishable from the defined OTLP range, as
+`SeverityNumber` does. `Span.StartTimeUnixNano` and `Span.EndTimeUnixNano`
+return the `fixed64` timestamps in fields 7 and 8. All four return the zero
+value when absent and resolve repeated occurrences to the last one.
+
+Those four read from one schema-aware walk of the whole Span, so they accept
+and reject exactly the same bytes. Each call runs that walk once, so a consumer
+reading all four pays for four. Unlike the LogRecord walk, this one is
+schema-aware at the Span level and framing-only below it: `attributes`,
+`events`, `links` and `status` are checked for wire type and containment, but
+their contents are not parsed. Cost therefore tracks a span's field count
+rather than its payload size.
+
+The identifier accessors scan first-match and stop, so they do not walk to the
+end of the span and do not report corruption located after the identifier they
+read. On conformant OTLP that is indistinguishable from the scalar accessors'
+resolution, because each singular field occurs exactly once. On malformed input
+the two differ; [operations.md](../operations.md) tabulates exactly how.
 
 ### Re-wrapping resource containers
 
@@ -444,7 +474,7 @@ repeated before a breaking change.
 | Bindweed | Log-severity distribution without full pdata decode | Complete log traversal, service-context strings, severity parity, malformed-input behavior |
 | Sage | Missing-severity detection with selective fallback | Severity scalar semantics, resource attributes, full traversal/fallback boundary |
 | Chaff | Resource cache short-circuit and metric-name extraction | Resource bytes, scope/metric traversal, metric names, error callback behavior |
-| Dibber, Gaps, Overstory | Partial trace processing | Resource/scope/span traversal and fixed-width trace identifiers |
+| Dibber, Gaps, Overstory | Partial trace processing | Resource/scope/span traversal and the Span field accessors |
 | Fig, Nameplate, Seedtray | Generic resource extraction, counting or splitting | Symmetry across all three signals, raw-byte ownership, `WriteTo` output |
 
 At the time of this audit, repository-wide GitHub search found direct source

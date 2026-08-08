@@ -64,11 +64,12 @@ Parsing composes a small set of helpers around
 
 - repeated-field counting;
 - repeated-field iteration;
-- length-delimited, fixed-width and scalar extraction, in first-match and
-  last-value-wins forms;
+- length-delimited and scalar extraction, in first-match and last-value-wins
+  forms;
 - merged singular-message extraction and resource re-wrapping;
 - field skipping with matching-group validation;
-- bounded semantic parsing for KeyValue, AnyValue, Resource and LogRecord.
+- bounded semantic parsing for KeyValue, AnyValue, Resource, LogRecord and
+  Span.
 
 Field numbers and expected wire types come from the upstream OTLP protobuf
 schema. A refactor should centralize those facts where useful, but must keep
@@ -167,10 +168,49 @@ E-2941) previously played that role directly; its replacement is
 
 ### Traces
 
-Trace access is intentionally narrow. Consumers can iterate scopes and spans,
-count spans, and extract the three fixed-width identifiers used by partial
-trace detectors. Identifier accessors return arrays to make the required width
-part of the Go type and reject incorrectly sized wire values.
+Consumers can iterate scopes and spans, count spans, and read seven `Span`
+fields: the three identifiers, `name`, `kind`, and the start and end
+timestamps. Identifier accessors return arrays to make the required width part
+of the Go type and reject incorrectly sized wire values.
+
+`Name`, `Kind`, `StartTimeUnixNano` and `EndTimeUnixNano` read from
+`parseSpanFields`, one schema-aware walk of the whole span, and resolve
+last-value-wins as pdata does. Each call runs that walk once, so reading all
+four costs four walks; [BENCHMARKS.md](BENCHMARKS.md) has the measured cost
+against a single-pass hand-rolled walk and against pdata.
+
+**The identifier accessors deliberately do not share that walk.** They scan
+first-match and stop at their field. Resolving them last-value-wins would mean
+walking every span to its end, and the only thing that buys is different
+behavior on malformed input: a conformant producer emits each singular field
+exactly once, so first-match and last-wins return the same value and the same
+verdict. Paying a per-span cost on all conformant traffic to change what
+happens on corrupt traffic is the wrong trade, and the cost is producer-shaped
+rather than small — pdata marshals fields back-to-front so `trace_id` lands
+last, where the SDK exporters put it first and a full walk is up to two orders
+of magnitude more expensive. BENCHMARKS.md has the numbers.
+
+The accepted consequence is that `Span` carries two parser classes: on
+malformed bytes `Name()` can reject a span whose `TraceID()` succeeds. That is
+the divergence risk in [operations.md](../operations.md), taken knowingly here
+rather than engineered away, and pinned by
+`TestSpanIdentifiers_FirstMatchDivergence` so it cannot drift unnoticed.
+
+**The walk is framing-only below the Span level.** It checks the wire type and
+containment of `attributes`, `events`, `links` and `status` without parsing
+their contents, where the LogRecord walk does descend into the body and every
+attribute. The discriminator is what the accessor's own consumer reads next: a
+severity consumer reads the record's attributes, and sage's parity requirement
+made validating them load-bearing, whereas none of the Span fields this package
+exposes depends on a span's attributes, events or links. Descending anyway
+would tie every scalar accessor's cost to a span's event and attribute count
+for no accessor's benefit.
+
+The cost is a narrower validity claim than pdata's: malformed *contents* inside
+a correctly framed `attributes`, `events`, `links` or `status` are accepted here
+and rejected by pdata. `TestSpanFields_PdataDivergence` pins that class and
+[operations.md](../operations.md) tabulates it for consumers pairing the wire
+path with a pdata fallback.
 
 ## Singular field resolution
 
@@ -209,6 +249,17 @@ worked example: field 3 is a singular scalar, but `parseLogRecordSeverity`
 already validates the whole LogRecord for `SeverityNumber`, so `SeverityText`
 reads from there rather than scanning independently.
 
+**When no walk exists, weigh building one against what it costs the accessors
+already there.** `Span` is the worked example. Its four scalar fields resolve
+last-value-wins, which requires walking to the end of the message; its three
+identifier accessors are first-match scans that stop early. Converging them
+would have made one parser class out of two, at the price of a full walk on
+every conformant span — to change behavior only malformed spans can exhibit,
+since a conformant producer emits each singular field once. The four scalars
+therefore share `parseSpanFields` and the identifiers stay on
+`extractFixedBytesField`. "Traces" above records the trade and the divergence
+it accepts; [BENCHMARKS.md](BENCHMARKS.md) prices it.
+
 ### Singular messages: merged (`Resource`, `InstrumentationScope`)
 
 The three `Resource()` and three `Scope()` methods share one extractor,
@@ -218,9 +269,9 @@ scope in E-2942:
 - **Absence is not an error.** OTLP declares both fields optional, and pdata
   accepts a container without them, reporting an empty message. The
   extractor returns `(nil, nil)` for absence, matching the convention already
-  used by `extractBytesField`, `extractFixed64Field`, and
-  `extractFixedBytesField` elsewhere in `wire.go`. A malformed occurrence
-  (wrong wire type, bad length) is still an error.
+  used by `extractBytesField` and `extractFixed64Field` elsewhere in
+  `wire.go`. A malformed occurrence (wrong wire type, bad length) is still an
+  error.
 - **Exactly one, merged.** Each container has exactly one pdata-visible
   Resource or scope, matching pdata's object model. Protobuf merges repeated
   occurrences of a singular message field, and pdata performs that merge, so
