@@ -299,18 +299,11 @@ name, err := scope.Name()
 ```
 
 **Repeated fields resolve two different ways**, matching protobuf and pdata:
-
-- **Singular *messages*** — `Resource()`, `Scope()` — **merge**. pdata unmarshals
-  every occurrence into the same object, so their contents accumulate.
-- **Singular *scalars*** — `SchemaUrl()`, `InstrumentationScope.Name()` and
-  `Version()`, `Metric.Name()` — **resolve to the last occurrence**. pdata
-  assigns on each one, so a later occurrence replaces an earlier one.
-
-Honoring the scalar rule means these accessors scan the whole enclosing
-message instead of returning at the first match, so corruption after the last
-occurrence is reported as an error. `KeyValue.Key` and `KeyValue.ValueRaw`
-are deliberately exempt: they remain lightweight first-match views for hashing
-hot paths (see [docs/DESIGN.md](docs/DESIGN.md)).
+singular *messages* (`Resource()`, `Scope()`) merge, while singular *scalars*
+(`SchemaUrl()`, `InstrumentationScope.Name()` and `Version()`, `Metric.Name()`)
+resolve to the last occurrence. `KeyValue.Key` and `KeyValue.ValueRaw` are
+deliberately exempt and stay first-match for hashing hot paths.
+[docs/DESIGN.md](docs/DESIGN.md) explains why.
 
 `KeyValue.ValueRaw` remains a lightweight view of the first encoded AnyValue
 field for hashing-oriented hot paths. `KeyValue.StringValue` fully parses

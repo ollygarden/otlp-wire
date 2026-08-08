@@ -76,17 +76,6 @@ func resourceContainerWithScope(sc []byte) []byte {
 	return append(out, sc...)
 }
 
-// resourceContainerWithSchemaURLs wraps a scope container and appends
-// schema_url occurrences (field 3) at the resource-container level.
-func resourceContainerWithSchemaURLs(sc []byte, schemaURLs ...string) []byte {
-	out := resourceContainerWithScope(sc)
-	for _, u := range schemaURLs {
-		out = protowire.AppendTag(out, 3, protowire.BytesType)
-		out = protowire.AppendString(out, u)
-	}
-	return out
-}
-
 // ---------- signal-generic harness ----------
 
 // scopeGetter is satisfied by ScopeLogs, ScopeMetrics, and ScopeSpans.
@@ -95,31 +84,24 @@ type scopeGetter interface {
 	SchemaUrl() ([]byte, error)
 }
 
-// schemaURLGetter is satisfied by every resource and scope container.
-type schemaURLGetter interface {
-	SchemaUrl() ([]byte, error)
-}
-
 // pdataScopeView is what the oracle reports for a single-resource,
-// single-scope payload.
+// single-scope payload. Resource-level schema_url is covered in
+// resource_test.go, next to the other resource-container accessors.
 type pdataScopeView struct {
-	scope             pcommon.InstrumentationScope
-	scopeSchemaURL    string
-	resourceSchemaURL string
+	scope          pcommon.InstrumentationScope
+	scopeSchemaURL string
 }
 
 type scopeSignalFixture struct {
-	name      string
-	scopes    func([]byte) scopeGetter
-	resources func([]byte) schemaURLGetter
-	pdata     func(t *testing.T, payload []byte) pdataScopeView
+	name   string
+	scopes func([]byte) scopeGetter
+	pdata  func(t *testing.T, payload []byte) pdataScopeView
 }
 
 var scopeSignalFixtures = []scopeSignalFixture{
 	{
-		name:      "metrics",
-		scopes:    func(b []byte) scopeGetter { return ScopeMetrics(b) },
-		resources: func(b []byte) schemaURLGetter { return ResourceMetrics(b) },
+		name:   "metrics",
+		scopes: func(b []byte) scopeGetter { return ScopeMetrics(b) },
 		pdata: func(t *testing.T, payload []byte) pdataScopeView {
 			t.Helper()
 			req := pmetricotlp.NewExportRequest()
@@ -128,13 +110,12 @@ var scopeSignalFixtures = []scopeSignalFixture{
 			rm := req.Metrics().ResourceMetrics().At(0)
 			require.Equal(t, 1, rm.ScopeMetrics().Len())
 			sm := rm.ScopeMetrics().At(0)
-			return pdataScopeView{sm.Scope(), sm.SchemaUrl(), rm.SchemaUrl()}
+			return pdataScopeView{sm.Scope(), sm.SchemaUrl()}
 		},
 	},
 	{
-		name:      "logs",
-		scopes:    func(b []byte) scopeGetter { return ScopeLogs(b) },
-		resources: func(b []byte) schemaURLGetter { return ResourceLogs(b) },
+		name:   "logs",
+		scopes: func(b []byte) scopeGetter { return ScopeLogs(b) },
 		pdata: func(t *testing.T, payload []byte) pdataScopeView {
 			t.Helper()
 			req := plogotlp.NewExportRequest()
@@ -143,13 +124,12 @@ var scopeSignalFixtures = []scopeSignalFixture{
 			rl := req.Logs().ResourceLogs().At(0)
 			require.Equal(t, 1, rl.ScopeLogs().Len())
 			sl := rl.ScopeLogs().At(0)
-			return pdataScopeView{sl.Scope(), sl.SchemaUrl(), rl.SchemaUrl()}
+			return pdataScopeView{sl.Scope(), sl.SchemaUrl()}
 		},
 	},
 	{
-		name:      "traces",
-		scopes:    func(b []byte) scopeGetter { return ScopeSpans(b) },
-		resources: func(b []byte) schemaURLGetter { return ResourceSpans(b) },
+		name:   "traces",
+		scopes: func(b []byte) scopeGetter { return ScopeSpans(b) },
 		pdata: func(t *testing.T, payload []byte) pdataScopeView {
 			t.Helper()
 			req := ptraceotlp.NewExportRequest()
@@ -158,7 +138,7 @@ var scopeSignalFixtures = []scopeSignalFixture{
 			rs := req.Traces().ResourceSpans().At(0)
 			require.Equal(t, 1, rs.ScopeSpans().Len())
 			ss := rs.ScopeSpans().At(0)
-			return pdataScopeView{ss.Scope(), ss.SchemaUrl(), rs.SchemaUrl()}
+			return pdataScopeView{ss.Scope(), ss.SchemaUrl()}
 		},
 	},
 }
@@ -609,20 +589,13 @@ func TestScope_UnknownAndOutOfOrderFieldsSkipped(t *testing.T) {
 // pdata's empty string.
 func TestSchemaUrl_Absent(t *testing.T) {
 	sc := scopeContainer(scopeMessage("checkout-instr", ""))
-	container := resourceContainerWithScope(sc)
-	payload := wrapAsRequest(container)
+	payload := wrapAsRequest(resourceContainerWithScope(sc))
 
 	for _, sf := range scopeSignalFixtures {
 		t.Run(sf.name, func(t *testing.T) {
-			view := sf.pdata(t, payload)
-			require.Empty(t, view.scopeSchemaURL)
-			require.Empty(t, view.resourceSchemaURL)
+			require.Empty(t, sf.pdata(t, payload).scopeSchemaURL)
 
 			got, err := sf.scopes(sc).SchemaUrl()
-			require.NoError(t, err)
-			require.Nil(t, got)
-
-			got, err = sf.resources(container).SchemaUrl()
 			require.NoError(t, err)
 			require.Nil(t, got)
 		})
@@ -647,20 +620,14 @@ func TestSchemaUrl_LastValueWins(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sc := scopeContainerWithSchemaURLs([][]byte{scopeMessage("s", "")}, tt.urls...)
-			container := resourceContainerWithSchemaURLs(sc, tt.urls...)
-			payload := wrapAsRequest(container)
+			payload := wrapAsRequest(resourceContainerWithScope(sc))
 
 			for _, sf := range scopeSignalFixtures {
 				t.Run(sf.name, func(t *testing.T) {
-					view := sf.pdata(t, payload)
-					require.Equal(t, tt.want, view.scopeSchemaURL, "pdata scope schema_url")
-					require.Equal(t, tt.want, view.resourceSchemaURL, "pdata resource schema_url")
+					require.Equal(t, tt.want, sf.pdata(t, payload).scopeSchemaURL,
+						"pdata scope schema_url")
 
 					got, err := sf.scopes(sc).SchemaUrl()
-					require.NoError(t, err)
-					require.Equal(t, tt.want, string(got))
-
-					got, err = sf.resources(container).SchemaUrl()
 					require.NoError(t, err)
 					require.Equal(t, tt.want, string(got))
 				})
@@ -708,9 +675,6 @@ func TestSchemaUrl_Malformed(t *testing.T) {
 				t.Run(sf.name, func(t *testing.T) {
 					_, err := sf.scopes(tt.sc).SchemaUrl()
 					require.Error(t, err)
-
-					_, err = sf.resources(resourceContainerWithScope(nil)).SchemaUrl()
-					require.NoError(t, err, "control: a clean container must still parse")
 				})
 			}
 		})

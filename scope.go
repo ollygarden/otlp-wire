@@ -5,13 +5,12 @@ import (
 )
 
 // Name returns the scope name (field 1) as a view into the underlying buffer.
-// Returns nil if the field is not present.
+// Returns nil if the field is not present. Repeated occurrences resolve to
+// the last one; see extractLastBytesField.
 //
-// Repeated occurrences resolve to the last one, matching protobuf singular
-// scalar semantics and pdata's unmarshal. Validation is structural and
-// operation-scoped: the whole scope message is walked, so trailing corruption
-// is reported, but nested attribute values are only parsed when Attributes is
-// iterated.
+// Validation is structural and operation-scoped: the whole scope message is
+// walked, so trailing corruption is reported, but nested attribute values are
+// only parsed when Attributes is iterated.
 func (s InstrumentationScope) Name() ([]byte, error) {
 	return extractLastBytesField([]byte(s), 1)
 }
@@ -36,11 +35,5 @@ func (s InstrumentationScope) Attributes() (iter.Seq[KeyValue], func() error) {
 // directly. On a parse error it yields a nil KeyValue with a non-nil error and
 // stops.
 func (s InstrumentationScope) AttributesSeq(yield func(KeyValue, error) bool) {
-	forEachRepeatedField([]byte(s), 3, func(rb []byte, err error) bool {
-		if err != nil {
-			yield(nil, err)
-			return false
-		}
-		return yield(KeyValue(rb), nil)
-	})
+	keyValueSeq([]byte(s), 3, yield)
 }

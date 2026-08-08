@@ -241,17 +241,12 @@ the "Resources and attributes" section of
 [specification.md](specification.md) — not a general change to the "iterators
 validate operation-scoped" contract. Each skipped tag is cheap:
 `protowire.ConsumeFieldValue` on a length-delimited field only reads the
-length prefix and jumps the body, so the per-tag cost is O(1) regardless of
-payload size. The *total* is O(sibling fields), which matters more for scope
-containers than for resource containers: a resource container holds a handful
-of scopes, whereas a scope container holds every record. Measured at roughly
-10 ns per skipped record, so `ScopeLogs.Scope()` on a 1000-record container
-costs about 10 µs and stays allocation-free. A consumer that reads the scope
-and then iterates the records pays this as a constant factor on a walk it was
-already doing; one that reads *only* the scope name and stops early — dibber's
-shape — trades its former early exit for pdata parity. `BenchmarkScope_ScanScaling`
-and `BenchmarkSchemaUrl_ScanScaling` pin the curve (see
-[BENCHMARKS.md](BENCHMARKS.md)).
+length prefix and jumps the body, so cost scales with the enclosing message's
+field count, not its payload size, and stays allocation-free. That matters
+more for scope containers than resource containers, because a scope container
+holds every record where a resource container holds a handful of scopes.
+[BENCHMARKS.md](BENCHMARKS.md) has the measured curve and what it costs a
+consumer that reads only the scope and stops early.
 
 ### `WriteTo`
 

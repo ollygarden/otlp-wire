@@ -49,13 +49,7 @@ func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error) {
 //
 // On a parse error it yields a nil KeyValue with a non-nil error and stops.
 func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool) {
-	forEachRepeatedField(d.raw, d.attributesFieldNum(), func(rb []byte, err error) bool {
-		if err != nil {
-			yield(nil, err)
-			return false
-		}
-		return yield(KeyValue(rb), nil)
-	})
+	keyValueSeq(d.raw, d.attributesFieldNum(), yield)
 }
 
 // DataPointCount returns the total number of metric data points in the batch.
@@ -134,8 +128,7 @@ func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error) {
 
 // Name returns the metric name (field 1) as a view into the underlying
 // buffer. Returns nil if the field is not present. Repeated occurrences
-// resolve to the last one, matching protobuf singular scalar semantics and
-// pdata's unmarshal.
+// resolve to the last one; see extractLastBytesField.
 func (m Metric) Name() ([]byte, error) {
 	return extractLastBytesField([]byte(m), 1)
 }

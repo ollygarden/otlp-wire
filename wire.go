@@ -288,18 +288,14 @@ func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 }
 
 // extractLastBytesField extracts a singular length-delimited scalar field,
-// resolving repeated occurrences by last-value-wins. Returns nil (not an
-// error) if absent. The returned slice aliases data; no copy is made.
+// resolving repeated occurrences by last-value-wins the way protobuf and
+// pdata do. Returns nil (not an error) if absent; the returned slice aliases
+// data.
 //
-// Protobuf specifies that a repeated occurrence of a singular scalar replaces
-// the earlier one, and pdata implements exactly that with a plain assignment
-// (`orig.SchemaUrl = string(...)`), unlike the embedded messages it merges via
-// extractMergedMessage. Honoring that requires scanning the whole message
-// rather than returning at the first match the way extractBytesField does, so
-// a malformed field after the last occurrence is an error here too.
-//
-// docs/DESIGN.md records why singular scalars resolve differently from
-// singular messages.
+// Reaching the last occurrence means walking the whole message, so unlike
+// extractBytesField this reports a malformed field after that occurrence.
+// docs/DESIGN.md records why scalars resolve differently from the messages
+// extractMergedMessage merges.
 func extractLastBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 	var last []byte
 	var walkErr error

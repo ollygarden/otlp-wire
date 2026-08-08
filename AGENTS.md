@@ -89,13 +89,10 @@ for new accessors.
 - `DataPoint` carries `MetricType` because OTLP metric bodies use different
   field numbers for timestamps and attributes. Preserve that association.
 - A new accessor for a *singular* field must pick its resolution deliberately:
-  singular messages (`Resource`, `InstrumentationScope`) merge repeated
-  occurrences via `extractMergedMessage`; singular scalars (`SchemaUrl`,
-  scope `Name`/`Version`, `Metric.Name`) take the last occurrence via
-  `extractLastBytesField`. Both scan the whole message, so neither can return
-  early. `extractBytesField`'s first-match behavior is reserved for the
-  documented `KeyValue.Key`/`ValueRaw` hashing views. Verify the choice
-  against pdata's generated unmarshal — merge appends, replacement assigns.
+  merge (`extractMergedMessage`) for messages, last-value-wins
+  (`extractLastBytesField`) for scalars. Verify the choice against pdata's
+  generated unmarshal — merge appends, replacement assigns. See "Singular
+  field resolution" in [docs/DESIGN.md](docs/DESIGN.md).
 - Malformed tags, lengths, wire types, identifiers, metric bodies, or nested
   messages must return parse errors. Never silently accept corruption to keep
   an iterator moving.

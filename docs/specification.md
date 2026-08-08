@@ -311,23 +311,16 @@ against this hierarchy must not assume they match.
 
 **Singular scalars resolve to the last occurrence (E-2942).** `SchemaUrl`,
 `InstrumentationScope.Name`, `InstrumentationScope.Version`, and `Metric.Name`
-return the *last* occurrence when a field is repeated. Protobuf specifies
-replacement for repeated singular scalars, and pdata implements it with a
-plain assignment. This is the counterpart to the merge rule for singular
-messages, and the distinction is a behavioral contract, not an implementation
-detail: a consumer relying on first-match resolution would diverge from its
-pdata fallback on the same bytes.
+return the *last* occurrence when a field is repeated, which is what protobuf
+and pdata do. The distinction from the merge rule for singular messages is a
+behavioral contract, not an implementation detail: a consumer relying on
+first-match resolution would diverge from its pdata fallback on the same
+bytes. [DESIGN.md](DESIGN.md) records why.
 
-Two consequences follow, both mirroring the `Resource()` change:
-
-- These accessors scan the whole enclosing message rather than returning at
-  the first match, so a malformed field located *after* the last occurrence is
-  now reported as an error.
-- Cost grows with the number of sibling fields. For a scope container that
-  means the record count, which is larger than the scope count a resource
-  container holds. The walk stays allocation-free and skips record bodies
-  without descending; see [BENCHMARKS.md](BENCHMARKS.md) for the measured
-  curve.
+Two consequences follow, both mirroring the `Resource()` change: these
+accessors scan the whole enclosing message, so a malformed field located
+*after* the last occurrence is reported as an error; and cost grows with the
+enclosing message's field count while staying allocation-free.
 
 **`Metric.Name` behavior change (unreleased, E-2942, v0.1.0).** It previously
 returned the first occurrence. That diverged from pdata in exactly the way

@@ -82,6 +82,7 @@ func resourceWithStringAttr(key, value string) []byte {
 // ResourceSpans, letting one test body cover all three signals.
 type resourceGetter interface {
 	Resource() (Resource, error)
+	SchemaUrl() ([]byte, error)
 }
 
 type signalFixture struct {
@@ -90,6 +91,9 @@ type signalFixture struct {
 	// attrs returns the container's Resource attributes via pdata, the oracle
 	// for merge and absence behavior.
 	attrs func(t *testing.T, payload []byte) pcommon.Map
+	// schemaURL returns the container's schema_url via pdata, the oracle for
+	// singular-scalar resolution.
+	schemaURL func(t *testing.T, payload []byte) string
 }
 
 var signalFixtures = []signalFixture{
@@ -103,6 +107,12 @@ var signalFixtures = []signalFixture{
 			require.Equal(t, 1, req.Metrics().ResourceMetrics().Len())
 			return req.Metrics().ResourceMetrics().At(0).Resource().Attributes()
 		},
+		schemaURL: func(t *testing.T, payload []byte) string {
+			t.Helper()
+			req := pmetricotlp.NewExportRequest()
+			require.NoError(t, req.UnmarshalProto(payload))
+			return req.Metrics().ResourceMetrics().At(0).SchemaUrl()
+		},
 	},
 	{
 		name: "logs",
@@ -114,6 +124,12 @@ var signalFixtures = []signalFixture{
 			require.Equal(t, 1, req.Logs().ResourceLogs().Len())
 			return req.Logs().ResourceLogs().At(0).Resource().Attributes()
 		},
+		schemaURL: func(t *testing.T, payload []byte) string {
+			t.Helper()
+			req := plogotlp.NewExportRequest()
+			require.NoError(t, req.UnmarshalProto(payload))
+			return req.Logs().ResourceLogs().At(0).SchemaUrl()
+		},
 	},
 	{
 		name: "traces",
@@ -124,6 +140,12 @@ var signalFixtures = []signalFixture{
 			require.NoError(t, req.UnmarshalProto(payload))
 			require.Equal(t, 1, req.Traces().ResourceSpans().Len())
 			return req.Traces().ResourceSpans().At(0).Resource().Attributes()
+		},
+		schemaURL: func(t *testing.T, payload []byte) string {
+			t.Helper()
+			req := ptraceotlp.NewExportRequest()
+			require.NoError(t, req.UnmarshalProto(payload))
+			return req.Traces().ResourceSpans().At(0).SchemaUrl()
 		},
 	},
 }
@@ -453,6 +475,48 @@ func TestResource_ValidOccurrencesStillMerge(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, found, "attribute %q must survive the merge", key)
 				require.Equal(t, want, string(value))
+			}
+		})
+	}
+}
+
+// ---------- schema_url: a singular scalar, not a merged message ----------
+
+// TestResourceSchemaUrl covers the container-level schema_url (field 3).
+// Unlike Resource, it is a singular *scalar*: protobuf and pdata resolve a
+// repeated occurrence to the last one rather than merging.
+func TestResourceSchemaUrl(t *testing.T) {
+	tests := []struct {
+		name string
+		urls []string
+		want string
+	}{
+		{"absent", nil, ""},
+		{"single", []string{"https://example.test/v1"}, "https://example.test/v1"},
+		{"repeated", []string{"https://example.test/v1", "https://example.test/v2"}, "https://example.test/v2"},
+		{"last is empty", []string{"https://example.test/v1", ""}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			container := containerWithResource(resourceWithStringAttr("service.name", "checkout"))
+			for _, u := range tt.urls {
+				container = protowire.AppendTag(container, 3, protowire.BytesType)
+				container = protowire.AppendString(container, u)
+			}
+			payload := wrapAsRequest(container)
+
+			for _, sf := range signalFixtures {
+				t.Run(sf.name, func(t *testing.T) {
+					require.Equal(t, tt.want, sf.schemaURL(t, payload), "pdata schema_url")
+
+					got, err := sf.wrap(container).SchemaUrl()
+					require.NoError(t, err)
+					require.Equal(t, tt.want, string(got))
+					if tt.urls == nil {
+						require.Nil(t, got, "an absent schema_url is (nil, nil)")
+					}
+				})
 			}
 		})
 	}
