@@ -521,3 +521,91 @@ func TestResourceSchemaUrl(t *testing.T) {
 		})
 	}
 }
+
+// ---------- Resource.AttributesSeq ----------
+
+// TestResource_AttributesSeq covers the zero-allocation attribute path, which
+// scope_test.go cites as the gate its own AttributesSeq must match. It reads
+// Resource attributes from field 1; a wrong field number here would silently
+// yield nothing to every caller on the hot path.
+func TestResource_AttributesSeq(t *testing.T) {
+	res := append(resourceWithStringAttr("service.name", "checkout"),
+		resourceWithStringAttr("host.name", "host-1")...)
+	resource := Resource(res)
+
+	var got [][2]string
+	resource.AttributesSeq(func(kv KeyValue, err error) bool {
+		require.NoError(t, err)
+		key, err := kv.Key()
+		require.NoError(t, err)
+		value, found, err := kv.StringValue()
+		require.NoError(t, err)
+		require.True(t, found)
+		got = append(got, [2]string{string(key), string(value)})
+		return true
+	})
+	require.Equal(t, [][2]string{
+		{"service.name", "checkout"},
+		{"host.name", "host-1"},
+	}, got)
+
+	// Same elements as the closure-based iterator.
+	var viaIter [][2]string
+	seq, errFn := resource.Attributes()
+	for kv := range seq {
+		key, err := kv.Key()
+		require.NoError(t, err)
+		value, _, err := kv.StringValue()
+		require.NoError(t, err)
+		viaIter = append(viaIter, [2]string{string(key), string(value)})
+	}
+	require.NoError(t, errFn())
+	require.Equal(t, got, viaIter)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		count := 0
+		resource.AttributesSeq(func(_ KeyValue, err error) bool {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+			return true
+		})
+		if count != 2 {
+			t.Fatalf("expected 2 attributes, got %d", count)
+		}
+	})
+	require.Zero(t, allocs)
+}
+
+// TestIteratedViewsAreCapacityClamped pins the guarantee that a yielded view
+// cannot be appended into its neighbours. protowire hands back slices whose
+// capacity runs to the end of the enclosing message, so without the clamp in
+// forEachRepeatedField a caller's append would corrupt the OTLP buffer it
+// does not own.
+func TestIteratedViewsAreCapacityClamped(t *testing.T) {
+	res := append(resourceWithStringAttr("service.name", "checkout"),
+		resourceWithStringAttr("host.name", "host-1")...)
+	scope := append(scopeWithStringAttr("library.language", "go"),
+		scopeWithStringAttr("library.name", "otel")...)
+
+	for _, tc := range []struct {
+		name string
+		seq  func(func(KeyValue, error) bool)
+	}{
+		{"resource", Resource(res).AttributesSeq},
+		{"scope", InstrumentationScope(scope).AttributesSeq},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			visited := 0
+			tc.seq(func(kv KeyValue, err error) bool {
+				require.NoError(t, err)
+				visited++
+				require.Equal(t, len(kv), cap(kv),
+					"yielded KeyValue must be capacity-clamped")
+				return true
+			})
+			require.Equal(t, 2, visited)
+		})
+	}
+}

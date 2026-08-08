@@ -322,6 +322,22 @@ accessors scan the whole enclosing message, so a malformed field located
 *after* the last occurrence is reported as an error; and cost grows with the
 enclosing message's field count while staying allocation-free.
 
+**Where the widened scan is stricter than pdata.** Skipping a field applies
+this library's group validation, which requires a start-group wire type to
+have its matching end-group marker. pdata's unknown-field skip does not: it
+returns as soon as it consumes a non-group wire type, even inside an unclosed
+group. A payload carrying an unclosed group in an unknown field *after* the
+last occurrence of a scanned field is therefore an error here and accepted by
+pdata. This is the one direction in which the wire path and the pdata
+fallback disagree, it is the safe direction, and it is deliberate: `AGENTS.md`
+requires that corruption never be silently accepted to keep a walk moving.
+Groups are a proto2 construct that OTLP never emits, so the shapes affected
+are malformed or adversarial rather than anything a conformant producer
+emits. `Metric.Name` is newly subject to this because it now scans; before
+E-2942 it returned at the first `name` field and never reached such a field.
+`TestMetricName_UnclosedGroupIsStricterThanPdata` pins the divergence so it
+stays a decision rather than an accident.
+
 **`Metric.Name` behavior change (unreleased, E-2942, v0.1.0).** It previously
 returned the first occurrence. That diverged from pdata in exactly the way
 `Resource()` did before E-2941, so it was corrected rather than left

@@ -35,6 +35,7 @@ parity; all are pre-release, so no rollback of a shipped tag is involved.
 | `Resource()` merges repeated occurrences instead of returning the first | E-2941 | Consumers reading resource attributes from multi-occurrence payloads |
 | `Resource()`, `Scope()` and the singular-scalar accessors report corruption located after the last relevant occurrence | E-2941, E-2942 | Consumers that previously parsed such payloads without error |
 | `Metric.Name()` returns the last occurrence of a repeated `name` instead of the first | E-2942 | Consumers reading names from payloads with a repeated `Metric.name` |
+| Scanning accessors reject an unclosed group in an unknown trailing field, which pdata accepts | E-2942 | Consumers pairing the wire path with a pdata fallback; only reachable on malformed or adversarial input, never on conformant OTLP |
 
 The canary decision and its measured pre/post comparison are recorded at
 release time, per "Release and production analysis" below. Confirm the canary

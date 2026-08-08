@@ -178,7 +178,10 @@ func TestScope_PresentButEmpty(t *testing.T) {
 
 			got, err := sf.scopes(sc).Scope()
 			require.NoError(t, err)
-			require.Empty(t, got)
+			// NotNil separates this from TestScope_AbsentField: a
+			// present-but-empty scope must not collapse into an absent one.
+			require.NotNil(t, got, "a zero-length scope is present, not absent")
+			require.Len(t, got, 0)
 
 			name, err := got.Name()
 			require.NoError(t, err)
@@ -551,12 +554,17 @@ func TestScope_MalformedAttributeSurfacesOnIteration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "checkout-instr", string(name))
 
+	// The visited counter matters: without it, pointing Attributes at the
+	// wrong field number would yield nothing and this test would still pass.
+	visited := 0
 	seq, errFn := got.Attributes()
 	for kv := range seq {
+		visited++
 		_, _, err := kv.StringValue()
 		require.Error(t, err)
 	}
 	require.NoError(t, errFn())
+	require.Equal(t, 1, visited, "the corrupt attribute must actually be yielded")
 }
 
 // TestScope_UnknownAndOutOfOrderFieldsSkipped proves forward compatibility:

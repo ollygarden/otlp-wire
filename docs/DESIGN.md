@@ -224,11 +224,24 @@ divergence from pdata of the same kind E-2941 fixed for `Resource()`, so it
 was corrected here rather than left to differ from the new accessors beside
 it.
 
-`KeyValue.Key` and `KeyValue.ValueRaw` deliberately keep first-match
-semantics via `extractBytesField`. They are the lightweight views described
-under "Error and compatibility strategy": per-attribute hot paths that hash
-encoded bytes and never needed pdata-equivalent scalar resolution. Their
-divergence is intentional and documented rather than latent.
+`KeyValue.Key` and `KeyValue.ValueRaw` keep first-match semantics via
+`extractBytesField`, and this is a known divergence rather than an
+application of the rule above. Both fields would resolve differently under
+it: pdata takes the last `KeyValue.key` (a scalar) and *merges* repeated
+`KeyValue.value` occurrences (a message, `orig.Value.UnmarshalProto` into the
+same AnyValue). So a KeyValue carrying two `value` occurrences resolves in
+pdata to the merged oneof result, while `ValueRaw` returns the first
+occurrence's bytes; and `Key` returns the first key where this package's own
+`parseKeyValue` — behind `StringValue` and `Resource.StringAttribute` —
+returns the last.
+
+They were left on first-match here because they are the per-attribute
+hashing views described under "Error and compatibility strategy", the
+library's hottest path, and changing them is a behavioral change to existing
+accessors that this change did not measure. Repeated occurrences of either
+field require a producer no consumer has been observed to run. The
+divergence is tracked for the specification-drift work rather than left
+implicit.
 
 **Validation-scope change.** Both resolutions need the complete message:
 merging must find every occurrence, and last-value-wins must reach the final

@@ -105,6 +105,12 @@ func countOccurrences(data []byte, fieldNum protowire.Number) (int, error) {
 
 // forEachRepeatedField iterates over a repeated field, calling fn for each occurrence.
 // The callback receives field bytes or an error. Return false to stop iteration.
+//
+// Yielded slices have their capacity clamped to their length. ConsumeBytes
+// hands back a slice whose capacity runs to the end of the enclosing message,
+// so an unclamped view would let a caller's append overwrite the sibling
+// fields that follow it in a buffer the library does not own. Every accessor
+// built on this helper inherits the guarantee.
 func forEachRepeatedField(data []byte, fieldNum protowire.Number, fn func([]byte, error) bool) {
 	pos := 0
 
@@ -128,7 +134,7 @@ func forEachRepeatedField(data []byte, fieldNum protowire.Number, fn func([]byte
 			}
 			pos += n
 
-			if !fn(msgBytes, nil) {
+			if !fn(msgBytes[:len(msgBytes):len(msgBytes)], nil) {
 				return
 			}
 		} else {
@@ -305,8 +311,7 @@ func extractLastBytesField(data []byte, fieldNum protowire.Number) ([]byte, erro
 			walkErr = err
 			return false
 		}
-		// Clamped so a caller's append cannot overwrite sibling fields.
-		last = item[:len(item):len(item)]
+		last = item
 		return true
 	})
 	if walkErr != nil {
