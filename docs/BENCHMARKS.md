@@ -756,8 +756,13 @@ done
 | `BenchmarkSpan_TraceIDOnly` (first-match, control) | 68,486 | 528 | 24 |
 
 **About 151% slower than the hand-rolled walk** (median paired delta +151.4%),
-slower in 15 of 15 rounds, at **allocation parity**. The gap is the walk count:
-four scalar accessor calls, four walks, against one.
+slower in 15 of 15 rounds, at **allocation parity**. The gap is the walk count,
+and it is conditional: the reduction calls `Kind()` on every span, then `Name()`
+and the two timestamps only on the spans that pass the internal-span filter.
+The fixture's kinds cycle through five values of which two are `Internal`, so
+the arm averages 1 + 0.4 x 3 = 2.2 scalar walks per span — plus one first-match
+`TraceID` scan — against the hand-rolled arm's single pass. A consumer reading
+all four scalars unconditionally would pay four.
 
 Read the comparison against the right baseline. overstory runs **pdata
 unmarshal** on `main` today; its wire walk lives on an unmerged branch.

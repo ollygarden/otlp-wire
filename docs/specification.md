@@ -387,9 +387,11 @@ severity text. That remains consumer policy.
 
 Trace traversal exposes scopes and spans. `TraceID`, `SpanID`, and
 `ParentSpanID` return fixed-width arrays, return the zero value when the field
-is absent, and reject malformed or incorrectly sized identifiers. An empty
-identifier occurrence assigns the zero value rather than being ignored, as
-pdata's `UnmarshalProto` does.
+is absent, and reject malformed or incorrectly sized identifiers. They select
+the **first** matching occurrence and stop there, so an empty occurrence yields
+the zero value only when it is that first one; later occurrences are never
+examined. On conformant OTLP, which carries each singular field exactly once,
+this is indistinguishable from pdata.
 
 `Span.Name` returns `name` (field 5) as raw bytes aliasing the request buffer,
 with the capacity clamped so a caller's `append` cannot overwrite adjacent
