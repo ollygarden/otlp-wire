@@ -75,8 +75,9 @@ ExportTracesServiceRequest
 Field numbers and wire types must stay aligned with the upstream OTLP protobuf
 definitions. Shared helpers such as repeated-field counting/iteration, field
 skipping, merged singular-message extraction, resource writing, and
-first-match, last-value-wins and fixed-byte extraction are the building blocks
-for new accessors.
+first-match and last-value-wins extraction are the building blocks for new
+accessors, alongside the per-message schema walks `parseLogRecordSeverity` and
+`parseSpanFields`.
 
 ## Iterator and error contracts
 
@@ -97,11 +98,28 @@ for new accessors.
   "Singular field resolution" in [docs/DESIGN.md](docs/DESIGN.md).
 - Before reaching for either helper, check whether an existing schema-aware
   walk already covers that message — `parseLogRecordSeverity` for `LogRecord`,
-  for example. If one does, read the field out of that walk and apply the
-  resolution there instead of adding a second, shallower parser. Two parsers
-  over one message diverge on malformed input, so the accessors disagree about
-  whether the same bytes are valid; `LogRecord.SeverityText` exists in its
-  current shape for this reason.
+  `parseSpanFields` for `Span`. If one does, read the field out of that walk
+  and apply the resolution there instead of adding a second, shallower parser.
+  Two parsers over one message diverge on malformed input, so the accessors
+  disagree about whether the same bytes are valid; `LogRecord.SeverityText`
+  exists in its current shape for this reason.
+- If no walk exists and the message's existing accessors scan it differently
+  from what the new field needs, price the convergence before buying it.
+  Moving a first-match accessor onto a full walk costs every conformant
+  message to change behavior only malformed ones can show, since a conformant
+  producer emits each singular field once. E-2945 measured that for `Span` and
+  left `TraceID`/`SpanID`/`ParentSpanID` on first-match; the two parser classes
+  and the divergence they produce are pinned by test and recorded in
+  [operations.md](operations.md). Measure with a paired benchmark against a
+  merge-base checkout, and note that a pdata-marshalled fixture hides the cost:
+  pdata writes fields back-to-front, so `trace_id` lands last where a real SDK
+  exporter puts it first.
+- Walk *depth* is a separate decision from walk *sharing*. Descend only into
+  nested messages a consumer of that accessor reads next: `parseSpanFields` is
+  framing-only below the Span level, where `parseLogRecordSeverity` parses the
+  body and attributes because severity consumers read them. A shallower walk
+  means a narrower validity claim than pdata's — pin the resulting divergences
+  in a test.
 - Malformed tags, lengths, wire types, identifiers, metric bodies, or nested
   messages must return parse errors. Never silently accept corruption to keep
   an iterator moving.

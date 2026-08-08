@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -1512,5 +1513,311 @@ func BenchmarkLogRecord_SeverityText(b *testing.B) {
 			total += len(text)
 		})
 		benchSeverityTextSink = total
+	}
+}
+
+// ========== Span field accessors: overstory's internal-spans detector ==========
+
+// benchSpanFieldsSink prevents the internal-span analysis from being optimized
+// away.
+var benchSpanFieldsSink int64
+
+// readSpanFieldsHandRolled is the walk overstory hand-rolls in
+// internal/detector/wire.go, copied verbatim as the "before" arm so the
+// comparison reproduces from this repository alone. It is deliberately not
+// equivalent work: it reads all five fields in one pass and checks the name
+// for UTF-8 validity, where the accessors each walk the span once and return
+// the name as raw bytes. Drop this arm and its docs/BENCHMARKS.md section once
+// overstory moves to the Span accessors.
+func readSpanFieldsHandRolled(span []byte) (handRolledSpanFields, error) {
+	var result handRolledSpanFields
+	data := span
+	for len(data) > 0 {
+		field, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return handRolledSpanFields{}, errors.New("malformed protobuf tag")
+		}
+		data = data[n:]
+		switch field {
+		case 1: // trace_id
+			if typ != protowire.BytesType {
+				return handRolledSpanFields{}, errors.New("wrong wire type for trace ID")
+			}
+			var raw []byte
+			raw, n = protowire.ConsumeBytes(data)
+			if n >= 0 {
+				if len(raw) != 0 && len(raw) != len(result.traceID) {
+					return handRolledSpanFields{}, errors.New("trace ID has unexpected size")
+				}
+				result.traceID = [16]byte{}
+				copy(result.traceID[:], raw)
+			}
+		case 5: // name
+			if typ != protowire.BytesType {
+				return handRolledSpanFields{}, errors.New("wrong wire type for span name")
+			}
+			result.name, n = protowire.ConsumeBytes(data)
+		case 6: // kind
+			if typ != protowire.VarintType {
+				return handRolledSpanFields{}, errors.New("wrong wire type for span kind")
+			}
+			result.kind, n = protowire.ConsumeVarint(data)
+		case 7: // start_time_unix_nano
+			if typ != protowire.Fixed64Type {
+				return handRolledSpanFields{}, errors.New("wrong wire type for span start time")
+			}
+			result.startUnixNano, n = protowire.ConsumeFixed64(data)
+		case 8: // end_time_unix_nano
+			if typ != protowire.Fixed64Type {
+				return handRolledSpanFields{}, errors.New("wrong wire type for span end time")
+			}
+			result.endUnixNano, n = protowire.ConsumeFixed64(data)
+		default:
+			n = protowire.ConsumeFieldValue(field, typ, data)
+		}
+		if n < 0 {
+			return handRolledSpanFields{}, errors.New("malformed protobuf field")
+		}
+		data = data[n:]
+	}
+	if !utf8.Valid(result.name) {
+		return handRolledSpanFields{}, errors.New("span name is not valid UTF-8")
+	}
+	return result, nil
+}
+
+type handRolledSpanFields struct {
+	traceID       [16]byte
+	name          []byte
+	kind          uint64
+	startUnixNano uint64
+	endUnixNano   uint64
+}
+
+// internalSpanAnalysis is the reduction overstory's detector performs: count
+// internal spans, tally their names, and total their durations.
+type internalSpanAnalysis struct {
+	count              int64
+	nameBytes          int64
+	totalDurationNanos int64
+	traceIDSum         int64
+}
+
+func (a internalSpanAnalysis) score() int64 {
+	return a.count + a.nameBytes + a.totalDurationNanos + a.traceIDSum
+}
+
+const benchInternalSpanKind = int64(ptrace.SpanKindInternal)
+
+func benchSpanFieldsPayload(b *testing.B) []byte {
+	b.Helper()
+	payload, err := (&ptrace.ProtoMarshaler{}).MarshalTraces(createInternalSpansBenchTraces())
+	require.NoError(b, err)
+	return payload
+}
+
+// createInternalSpansBenchTraces builds spans shaped like the ones overstory
+// sees: a mix of kinds, realistic attribute counts, and an event on the spans
+// that carry one. The attributes matter to this comparison — they are the
+// fields both walks must skip past to reach start_time and end_time.
+func createInternalSpansBenchTraces() ptrace.Traces {
+	traces := ptrace.NewTraces()
+	kinds := []ptrace.SpanKind{
+		ptrace.SpanKindServer,
+		ptrace.SpanKindInternal,
+		ptrace.SpanKindClient,
+		ptrace.SpanKindInternal,
+		ptrace.SpanKindProducer,
+	}
+
+	for resourceIndex := 0; resourceIndex < 5; resourceIndex++ {
+		rs := traces.ResourceSpans().AppendEmpty()
+		rs.Resource().Attributes().PutStr("service.name", "service-"+string(rune('A'+resourceIndex)))
+		rs.Resource().Attributes().PutStr("deployment.environment", "production")
+
+		ss := rs.ScopeSpans().AppendEmpty()
+		ss.Scope().SetName("test-instrumentation")
+
+		for spanIndex := 0; spanIndex < 100; spanIndex++ {
+			span := ss.Spans().AppendEmpty()
+			span.SetTraceID(pcommon.TraceID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, byte(spanIndex)}))
+			span.SetSpanID(pcommon.SpanID([8]byte{1, 2, 3, 4, 5, 6, 7, byte(spanIndex)}))
+			span.SetParentSpanID(pcommon.SpanID([8]byte{8, 7, 6, 5, 4, 3, 2, 1}))
+			span.SetName("orders.handler.process")
+			span.SetKind(kinds[spanIndex%len(kinds)])
+			span.SetStartTimestamp(pcommon.Timestamp(1_700_000_000_000_000_000 + uint64(spanIndex)*1_000))
+			span.SetEndTimestamp(pcommon.Timestamp(1_700_000_000_000_500_000 + uint64(spanIndex)*1_000))
+			span.Attributes().PutStr("http.request.method", "GET")
+			span.Attributes().PutStr("url.path", "/api/v1/orders")
+			span.Attributes().PutInt("http.response.status_code", 200)
+			span.Attributes().PutStr("network.protocol.version", "1.1")
+			span.Attributes().PutStr("user_agent.original", "checkout-client/2.1")
+			if spanIndex%10 == 0 {
+				event := span.Events().AppendEmpty()
+				event.SetName("exception")
+				event.Attributes().PutStr("exception.type", "TimeoutError")
+			}
+		}
+	}
+	return traces
+}
+
+// forEachBenchSpan walks down to every Span so the arms differ only in how
+// they read the span's fields. Keep the arms as separate functions:
+// dispatching through a func value defeats inlining and changes what is
+// measured.
+func forEachBenchSpan(b *testing.B, payload []byte, fn func(Span)) {
+	resources, resErr := ExportTracesServiceRequest(payload).ResourceSpans()
+	for rs := range resources {
+		scopes, scopeErr := rs.ScopeSpans()
+		for ss := range scopes {
+			spans, spanErr := ss.Spans()
+			for span := range spans {
+				fn(span)
+			}
+			if err := spanErr(); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := scopeErr(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := resErr(); err != nil {
+		b.Fatal(err)
+	}
+}
+
+// BenchmarkSpan_InternalSpans_HandRolled is overstory's detector as written
+// today: one walk per span reading all five fields.
+func BenchmarkSpan_InternalSpans_HandRolled(b *testing.B) {
+	payload := benchSpanFieldsPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var analysis internalSpanAnalysis
+		forEachBenchSpan(b, payload, func(span Span) {
+			fields, err := readSpanFieldsHandRolled([]byte(span))
+			if err != nil {
+				b.Fatal(err)
+			}
+			analysis.traceIDSum += int64(fields.traceID[15])
+			if int64(fields.kind) != benchInternalSpanKind {
+				return
+			}
+			analysis.count++
+			analysis.nameBytes += int64(len(fields.name))
+			if fields.endUnixNano > fields.startUnixNano {
+				analysis.totalDurationNanos += int64(fields.endUnixNano - fields.startUnixNano)
+			}
+		})
+		benchSpanFieldsSink = analysis.score()
+	}
+}
+
+// BenchmarkSpan_InternalSpans_Accessors is the same reduction through the
+// public accessors. Each of the four scalar accessors walks the span, so this
+// arm pays one walk per field read rather than one per span — the cost of
+// resolving a scalar last-value-wins the way pdata does. TraceID scans
+// first-match and stops.
+func BenchmarkSpan_InternalSpans_Accessors(b *testing.B) {
+	payload := benchSpanFieldsPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var analysis internalSpanAnalysis
+		forEachBenchSpan(b, payload, func(span Span) {
+			traceID, err := span.TraceID()
+			if err != nil {
+				b.Fatal(err)
+			}
+			analysis.traceIDSum += int64(traceID[15])
+			kind, err := span.Kind()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if int64(kind) != benchInternalSpanKind {
+				return
+			}
+			name, err := span.Name()
+			if err != nil {
+				b.Fatal(err)
+			}
+			start, err := span.StartTimeUnixNano()
+			if err != nil {
+				b.Fatal(err)
+			}
+			end, err := span.EndTimeUnixNano()
+			if err != nil {
+				b.Fatal(err)
+			}
+			analysis.count++
+			analysis.nameBytes += int64(len(name))
+			if end > start {
+				analysis.totalDurationNanos += int64(end - start)
+			}
+		})
+		benchSpanFieldsSink = analysis.score()
+	}
+}
+
+// BenchmarkSpan_InternalSpans_Unmarshal is the same reduction after a full
+// pdata unmarshal, the path overstory runs on main today.
+func BenchmarkSpan_InternalSpans_Unmarshal(b *testing.B) {
+	payload := benchSpanFieldsPayload(b)
+	unmarshaler := &ptrace.ProtoUnmarshaler{}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		traces, err := unmarshaler.UnmarshalTraces(payload)
+		if err != nil {
+			b.Fatal(err)
+		}
+		var analysis internalSpanAnalysis
+		for j := 0; j < traces.ResourceSpans().Len(); j++ {
+			rs := traces.ResourceSpans().At(j)
+			for k := 0; k < rs.ScopeSpans().Len(); k++ {
+				ss := rs.ScopeSpans().At(k)
+				for l := 0; l < ss.Spans().Len(); l++ {
+					span := ss.Spans().At(l)
+					traceID := span.TraceID()
+					analysis.traceIDSum += int64(traceID[15])
+					if int64(span.Kind()) != benchInternalSpanKind {
+						continue
+					}
+					analysis.count++
+					analysis.nameBytes += int64(len(span.Name()))
+					if span.EndTimestamp() > span.StartTimestamp() {
+						analysis.totalDurationNanos += int64(span.EndTimestamp() - span.StartTimestamp())
+					}
+				}
+			}
+		}
+		benchSpanFieldsSink = analysis.score()
+	}
+}
+
+// BenchmarkSpan_TraceIDOnly isolates the identifier read, which scans
+// first-match and is unchanged by this package's shared walk. It is the
+// control arm: whatever the four scalar accessors cost, this is what a
+// consumer reading only an identifier still pays.
+func BenchmarkSpan_TraceIDOnly(b *testing.B) {
+	payload := benchSpanFieldsPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var total int64
+		forEachBenchSpan(b, payload, func(span Span) {
+			traceID, err := span.TraceID()
+			if err != nil {
+				b.Fatal(err)
+			}
+			total += int64(traceID[15])
+		})
+		benchSpanFieldsSink = total
 	}
 }
