@@ -3,15 +3,11 @@
 ## Status and authority
 
 This document specifies the product boundary and compatibility contract of
-`go.olly.garden/otlp-wire` as of v0.0.4, plus one unreleased breaking change
-(E-2941, targeting v0.1.0) described in the "Resources and attributes"
-section below: `Resource()` on `ResourceMetrics`/`ResourceLogs`/`ResourceSpans`
-now returns the typed `Resource`, tolerates an absent Resource field, and
-merges repeated Resource occurrences; `ResourceLogs.StringAttribute` is
-removed. Update the version boundary in this line when that change is
-released. This document is otherwise the canonical reference for what the
-library is for, which behavior consumers may rely on, and what must remain
-true through a refactor.
+`go.olly.garden/otlp-wire` as of the latest release, v0.1.0, plus changes
+merged to `main` and not yet released. Sections that describe behavior a
+release does not yet carry say so. This document is the canonical reference
+for what the library is for, which behavior consumers may rely on, and what
+must remain true through a refactor.
 
 The other repository documents have narrower roles:
 
@@ -154,9 +150,9 @@ exit. Iteration is lazy: breaking early stops parsing, so corruption later in
 the unvisited input cannot be reported.
 
 Hot per-element paths additionally expose yield-based methods such as
-`DataPointsSeq`, `AttributesSeq`, and `LogRecordsSeq`. They yield `(value,
-error)` inline, stop after the first error, and avoid the escaping closures of
-the ordinary form. Both forms preserve wire order.
+`DataPointsSeq`, `MetadataSeq`, `AttributesSeq`, and `LogRecordsSeq`. They
+yield `(value, error)` inline, stop after the first error, and avoid the
+escaping closures of the ordinary form. Both forms preserve wire order.
 
 Changing the ordinary `(iter.Seq[T], func() error)` shape or the inline-error
 shape of the hot variants is a breaking API change.
@@ -353,14 +349,15 @@ Metrics traversal supports gauge, sum, histogram, exponential histogram, and
 summary bodies. A yielded `DataPoint` retains its `MetricType`; callers must
 not infer the data-point wire layout independently.
 
-`Metric.Name`, `DataPoint.Raw`, `Timestamp`, `Attributes`, `AttributesSeq`,
-`KeyValue.Key`, and `ValueRaw` return views or scalar values without a full
-metric decode. If a Metric encodes multiple recognized body fields, the
-current traversal yields data points from each body in wire order and tags
-each with its body type.
+`Metric.Name`, `Metadata`, `MetadataSeq`, `DataPoint.Raw`, `Timestamp`,
+`Attributes`, `AttributesSeq`, `KeyValue.Key`, and `ValueRaw` return views or
+scalar values without a full metric decode. If a Metric encodes multiple
+recognized body fields, the current traversal yields data points from each body
+in wire order and tags each with its body type.
 
-The metric metadata field is not currently exported as a dedicated accessor.
-Consumers needing it either parse that bounded field themselves or use pdata.
+`Metric.Metadata` and `MetadataSeq` iterate `Metric.metadata`, field 12. OTLP
+declares it `repeated`, so the singular-field resolution rules below do not
+apply: every occurrence is yielded in wire order, duplicate keys included.
 
 ### Log depth
 
@@ -400,7 +397,7 @@ is part of this library's purpose and compatibility surface.
 
 - Counting valid requests is zero-allocation.
 - Ordinary iterator opens have the documented small closure cost.
-- `DataPointsSeq`, `AttributesSeq` (on both `Resource` and
+- `DataPointsSeq`, `MetadataSeq`, `AttributesSeq` (on both `Resource` and
   `InstrumentationScope`), and `LogRecordsSeq` remain zero-allocation on their
   per-element paths.
 - Accessors return aliased slices rather than copying payload data, with one
@@ -429,7 +426,7 @@ repeated before a breaking change.
 
 | Consumer | Main use of otlp-wire | Compatibility-sensitive behavior |
 | --- | --- | --- |
-| Marigold | Deep metrics traversal and hashing | Metric names, all five metric types, data-point timestamps, raw KeyValue bytes, zero-allocation inner iterators |
+| Marigold | Deep metrics traversal and hashing | Metric names, metric metadata, all five metric types, data-point timestamps, raw KeyValue bytes, zero-allocation inner iterators |
 | Loam | Per-resource cache short-circuit for all signals | Resource-container order, raw Resource extraction, re-wrapping selected containers, safe fallback on parse errors |
 | Mulch | Wire-level log severity gate before selective pdata decode | Resource string semantics, scope/record order, severity parsing, retained raw record bytes |
 | Bindweed | Log-severity distribution without full pdata decode | Complete log traversal, service-context strings, severity parity, malformed-input behavior |
@@ -452,7 +449,7 @@ Past feature rollouts established the following sequence:
 | v0.0.2 | Span-level trace access (PR #2) | Adopt partial trace processing in detector services |
 | v0.0.3 | Metrics-depth traversal and zero-allocation variants (E-2608, PR #18) | Release the primitive first, then migrate metrics consumers such as Marigold with parity and production evidence |
 | v0.0.4 | Log traversal, severity and resource strings (E-2892, PR #22) | Release the primitive first, then use separate Bindweed, Mulch and Sage adoption issues (E-2900, E-2905, E-2906) |
-| v0.1.0 (unreleased) | Typed, absence-tolerant, merged `Resource()`; removes `ResourceLogs.StringAttribute` (E-2941) | Breaking: `Resource()` now returns `(Resource, error)` (direct calls stay compatible since `Resource` assigns to `[]byte`, but interfaces and method values typed on the old signature must be updated) and no longer errors on an absent Resource field; `rl.StringAttribute(k)` callers migrate to `rl.Resource()` then `res.StringAttribute(k)`. Release the primitive, then coordinate consumer releases per the acceptance gates below before broad upgrades |
+| v0.1.0 (released 2026-08-07) | Typed, absence-tolerant, merged `Resource()`; removes `ResourceLogs.StringAttribute` (E-2941) | Breaking: `Resource()` now returns `(Resource, error)` (direct calls stay compatible since `Resource` assigns to `[]byte`, but interfaces and method values typed on the old signature must be updated) and no longer errors on an absent Resource field; `rl.StringAttribute(k)` callers migrate to `rl.Resource()` then `res.StringAttribute(k)`. Release the primitive, then coordinate consumer releases per the acceptance gates below before broad upgrades |
 
 Future capabilities and refactors should follow the same staged model:
 

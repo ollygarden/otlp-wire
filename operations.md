@@ -20,13 +20,16 @@ this before releasing the module or changing a consumer rollout boundary.
 | --- | --- | --- | --- | --- |
 | Wire-contract regression | observed in tests | Consumer rejects valid OTLP or accepts malformed selected fields | Field number, wire type, merge, or oneof behavior changed | pdata differential and malformed-wire tests |
 | Allocation regression | hypothesized | Higher GC/CPU in high-volume consumers | Extra copies, escaping closures, or full decode added to a hot path | Allocation tests and paired `-benchmem` benchmarks |
-| Consumer contract regression | observed in tests | Compile failure or changed routing/detector result after upgrade | Exported API, aliasing, iterator timing, or `WriteTo` bytes changed | Consumer-focused tests and canary comparison; the v0.1.0 transitions below |
+| Consumer contract regression | observed in tests | Compile failure or changed routing/detector result after upgrade | Exported API, aliasing, iterator timing, or `WriteTo` bytes changed | Consumer-focused tests and canary comparison; the transitions below |
+| Benchmark-method error | observed | A performance claim or release decision rests on a delta that does not reproduce | A paired comparison run as sequential blocks (`go test -count=N`) instead of alternating invocations, or a gap claimed from overlapping ranges | Re-run alternating; see the release checklist below |
 
-### Known consumer-visible transitions in v0.1.0 (unreleased)
+### Known consumer-visible transitions in the API realignment
 
-The v0.1.0 API realignment (E-2940) changes behavior consumers can observe,
-not only signatures. Each is intentional and moves the wire path toward pdata
-parity; all are pre-release, so no rollback of a shipped tag is involved.
+These change behavior consumers can observe, not only signatures. Each is
+intentional and moves the wire path toward pdata parity. The realignment ships
+in stages, so release status is not uniform: check each against
+`git tag --merged` before assuming it is still pre-release, since reverting a
+published one means a consumer version pin.
 
 | Change | Issue | Who is affected |
 | --- | --- | --- |
@@ -54,7 +57,11 @@ queue telemetry cannot distinguish an idle path from a parser regression.
 ## Release and production analysis
 
 1. Verify race tests, vet, malformed-wire coverage, allocation gates, and
-   paired benchmarks on the exact release candidate.
+   paired benchmarks on the exact release candidate. Run paired comparisons as
+   alternating invocations of a prebuilt test binary, never `go test -count=N`,
+   which runs a benchmark's iterations consecutively rather than interleaving
+   the arms. Report the median of the paired per-round deltas and how many
+   rounds carried the sign; single rounds invert on a loaded machine.
 2. Tag the exact reviewed merge commit; never move or reuse a module tag.
 3. Upgrade one prominent consumer first and preserve its full transport,
    acknowledgement, retry, telemetry, and publication behavior.

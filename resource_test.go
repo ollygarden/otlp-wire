@@ -54,17 +54,31 @@ func containerWithResources(resources ...[]byte) []byte {
 	return protowire.AppendVarint(out, 0)
 }
 
-// stringKeyValue builds a KeyValue message with a string value (KeyValue.key
-// is field 1, KeyValue.value field 2, AnyValue.string_value field 1).
-func stringKeyValue(key, value string) []byte {
-	anyValue := protowire.AppendTag(nil, 1, protowire.BytesType)
-	anyValue = protowire.AppendString(anyValue, value)
-
+// keyValueMessage builds a KeyValue carrying key (field 1) and an already
+// encoded AnyValue body (field 2).
+func keyValueMessage(key string, anyValue []byte) []byte {
 	kv := protowire.AppendTag(nil, 1, protowire.BytesType)
 	kv = protowire.AppendString(kv, key)
 	kv = protowire.AppendTag(kv, 2, protowire.BytesType)
 	kv = protowire.AppendVarint(kv, uint64(len(anyValue)))
 	return append(kv, anyValue...)
+}
+
+// stringKeyValue builds a KeyValue message with a string value
+// (AnyValue.string_value is field 1).
+func stringKeyValue(key, value string) []byte {
+	anyValue := protowire.AppendTag(nil, 1, protowire.BytesType)
+	anyValue = protowire.AppendString(anyValue, value)
+	return keyValueMessage(key, anyValue)
+}
+
+// intKeyValue builds a KeyValue message with an int value
+// (AnyValue.int_value is field 3), for cases that need a value StringValue
+// must decline.
+func intKeyValue(key string, value int64) []byte {
+	anyValue := protowire.AppendTag(nil, 3, protowire.VarintType)
+	anyValue = protowire.AppendVarint(anyValue, uint64(value))
+	return keyValueMessage(key, anyValue)
 }
 
 // resourceWithStringAttr builds a Resource message carrying one string
@@ -588,6 +602,9 @@ func TestIteratedViewsAreCapacityClamped(t *testing.T) {
 		resourceWithStringAttr("host.name", "host-1")...)
 	scope := append(scopeWithStringAttr("library.language", "go"),
 		scopeWithStringAttr("library.name", "otel")...)
+	metric := metricWithMetadata("m",
+		stringKeyValue("metric.unit", "ms"),
+		stringKeyValue("metric.type", "histogram"))
 
 	for _, tc := range []struct {
 		name string
@@ -595,6 +612,7 @@ func TestIteratedViewsAreCapacityClamped(t *testing.T) {
 	}{
 		{"resource", Resource(res).AttributesSeq},
 		{"scope", InstrumentationScope(scope).AttributesSeq},
+		{"metric metadata", Metric(metric).MetadataSeq},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			visited := 0

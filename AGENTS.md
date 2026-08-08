@@ -38,9 +38,10 @@ code is split by domain: public types in `types.go`, signal traversal in
 `metrics.go`, `logs.go`, and `traces.go`, shared attribute semantics in
 `attributes.go`, signal-generic instrumentation-scope accessors in `scope.go`,
 and low-level protobuf walking in `wire.go`. Functional tests are in
-`otlpwire_test.go`, `log_iteration_test.go`, `resource_test.go`, and
-`scope_test.go`, usage examples in `example_test.go`, and comparative
-benchmarks in `benchmark_comparison_test.go`.
+`otlpwire_test.go`, `log_iteration_test.go`, `resource_test.go`,
+`scope_test.go`, and `metric_metadata_test.go`, usage examples in
+`example_test.go`, and comparative benchmarks in
+`benchmark_comparison_test.go`.
 
 Public wire types are byte slices or small wrappers over byte slices. They
 navigate protobuf fields directly with `protowire.ConsumeTag`,
@@ -83,16 +84,17 @@ for new accessors.
   closure after iteration, including after early exit. Do not replace this
   repository-wide contract casually.
 - Deep metrics hot paths also expose zero-allocation yield-based variants:
-  `Metric.DataPointsSeq` and `DataPoint.AttributesSeq`. Prefer the
-  closure-based APIs for ordinary code and the sequence variants only when
-  per-element allocation cost matters.
+  `Metric.DataPointsSeq`, `Metric.MetadataSeq` and `DataPoint.AttributesSeq`.
+  Prefer the closure-based APIs for ordinary code and the sequence variants
+  only when per-element allocation cost matters.
 - `DataPoint` carries `MetricType` because OTLP metric bodies use different
   field numbers for timestamps and attributes. Preserve that association.
 - A new accessor for a *singular* field must pick its resolution deliberately:
   merge (`extractMergedMessage`) for messages, last-value-wins
   (`extractLastBytesField`) for scalars. Verify the choice against pdata's
-  generated unmarshal — merge appends, replacement assigns. See "Singular
-  field resolution" in [docs/DESIGN.md](docs/DESIGN.md).
+  generated unmarshal — merge appends, replacement assigns. Check the `.proto`
+  declaration first: neither helper applies to a `repeated` field. See
+  "Singular field resolution" in [docs/DESIGN.md](docs/DESIGN.md).
 - Malformed tags, lengths, wire types, identifiers, metric bodies, or nested
   messages must return parse errors. Never silently accept corruption to keep
   an iterator moving.

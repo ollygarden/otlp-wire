@@ -542,3 +542,37 @@ The wire path is approximately 2.4x faster in this environment and avoids the
 full pdata object graph. Its 15 allocations are the established outer iterator
 error-closure cost; `ScopeLogs.LogRecordsSeq` itself remains zero-allocation on
 the per-record path.
+
+## `Metric.Metadata`
+
+`MetadataSeq` against the hand-rolled field-12 walk it replaces in marigold.
+
+**Environment:** i7-11800H, linux/amd64, Go 1.25.12, developer desktop under
+load. **Fixture:** `createScrapeShapedMetricsWithMetadata` — 4,800 metrics,
+three metadata entries each.
+
+`go test -count=N` runs a benchmark's iterations consecutively, so it does not
+interleave arms. Alternate single-arm invocations of a prebuilt binary and take
+the median of the paired per-round deltas:
+
+```bash
+go test -c -o /tmp/otlpwire.test .
+for round in $(seq 1 12); do
+  for arm in HandRolled Seq; do
+    /tmp/otlpwire.test -test.run '^$' -test.benchmem -test.benchtime=800x \
+      -test.bench "^BenchmarkMetric_Metadata_${arm}\$"
+  done
+done
+```
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| `BenchmarkMetric_Metadata_HandRolled` | 618,413 | 168 | 7 |
+| `BenchmarkMetric_Metadata_Seq` | 661,764 | 168 | 7 |
+
+Allocations match exactly; the per-element path allocates nothing. `MetadataSeq`
+is slower by single-digit percent — the ranges overlap, so the evidence is the
+paired median (between +3% and +6.5% across runs) and the sign, which held in
+12 of 12 rounds above. The cost is `forEachRepeatedField`'s capacity clamp plus
+one indirect call per element; the clamp is the guarantee a caller's `append`
+cannot reach the neighbouring entry, which the hand-rolled walk lacks.

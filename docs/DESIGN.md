@@ -98,6 +98,7 @@ closure cost by thousands of elements. The deepest hot paths therefore expose
 yield methods shaped like `iter.Seq2[T, error]`:
 
 - `Metric.DataPointsSeq`;
+- `Metric.MetadataSeq`;
 - `DataPoint.AttributesSeq`;
 - `Resource.AttributesSeq`;
 - `ScopeLogs.LogRecordsSeq`.
@@ -125,6 +126,10 @@ payload. `ValueRaw` exposes the encoded AnyValue for hashing-oriented callers;
 `StringValue` performs the more expensive semantic parse when string meaning
 is required.
 
+`Metric.Metadata` reads field 12. Cardinality consumers combine it with every
+data point's attributes across a whole scrape, so it gets the hot-path
+`MetadataSeq` form alongside the ordinary one.
+
 ### Logs
 
 Log consumers need both a very cheap per-record path and pdata-compatible
@@ -148,6 +153,11 @@ trace detectors. Identifier accessors return arrays to make the required width
 part of the Go type and reject incorrectly sized wire values.
 
 ## Singular field resolution
+
+This section governs only fields the OTLP protobuf declares *singular*. A
+`repeated` field needs no resolution decision: pdata appends each occurrence to
+the same slice, which a plain repeated-field walk reproduces. Check the
+declaration before reaching for either helper below.
 
 All six containers share one outer protobuf shape. In a resource container
 (`ResourceMetrics`/`ResourceLogs`/`ResourceSpans`) field 1 is the Resource;

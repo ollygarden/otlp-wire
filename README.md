@@ -219,6 +219,8 @@ func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error)
 
 type Metric []byte
 func (m Metric) Name() ([]byte, error)
+func (m Metric) Metadata() (iter.Seq[KeyValue], func() error)        // ergonomic, 2 allocs per open
+func (m Metric) MetadataSeq(yield func(KeyValue, error) bool)        // zero-alloc, range directly
 func (m Metric) DataPoints() (iter.Seq[DataPoint], func() error)     // ergonomic, 2 allocs per open
 func (m Metric) DataPointsSeq(yield func(DataPoint, error) bool)     // zero-alloc, range directly
 
@@ -298,9 +300,11 @@ if err != nil {
 name, err := scope.Name()
 ```
 
-**Repeated fields resolve two different ways**, matching protobuf and pdata:
-singular *messages* (`Resource()`, `Scope()`) merge, while singular *scalars*
-(`SchemaUrl()`, `InstrumentationScope.Name()` and `Version()`, `Metric.Name()`)
+**Singular fields resolve two different ways**, matching protobuf and pdata.
+Fields OTLP declares `repeated` — the attribute fields and `Metric.Metadata` —
+yield every occurrence in wire order instead. Singular *messages*
+(`Resource()`, `Scope()`) merge, while singular *scalars* (`SchemaUrl()`,
+`InstrumentationScope.Name()` and `Version()`, `Metric.Name()`)
 resolve to the last occurrence. `KeyValue.Key` and `KeyValue.ValueRaw` are
 deliberately exempt and stay first-match for hashing hot paths.
 [docs/DESIGN.md](docs/DESIGN.md) explains why.
@@ -318,9 +322,10 @@ and `AttributesSeq()` use `Type()` internally to pick the right field.
 
 Every level in this chain has both a closure-based iterator
 (`Metrics()`, `DataPoints()`, `Attributes()` — return `(iter.Seq[T], func() error)`,
-2 allocations per call to open) and, at the two hottest, deepest levels
-(`Metric.DataPointsSeq`, `DataPoint.AttributesSeq`), a zero-allocation `iter.Seq2`-style
-variant you range over directly, e.g. `for dp, err := range m.DataPointsSeq { ... }`.
+2 allocations per call to open) and, at the hottest, deepest levels
+(`Metric.MetadataSeq`, `Metric.DataPointsSeq`, `DataPoint.AttributesSeq`), a
+zero-allocation `iter.Seq2`-style variant you range over directly, e.g.
+`for dp, err := range m.DataPointsSeq { ... }`.
 Prefer the closure-based API for ordinary code — it reads naturally and the error
 check is explicit. Reach for the `Seq` variants on a per-element hot path, such as
 hashing every data point's attributes across thousands of metrics per scrape,

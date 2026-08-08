@@ -137,6 +137,75 @@ func ExampleMetric_DataPoints() {
 	// Output: request.duration ts=1000000000 attr=method
 }
 
+// ExampleMetric_Metadata reads the metadata a receiver attaches to a metric.
+// It is a repeated field, so occurrences are yielded in wire order, duplicate
+// keys included. MetadataSeq is the zero-allocation variant to reach for when
+// a hot path combines metadata with every data point's attributes.
+func ExampleMetric_Metadata() {
+	metrics := pmetric.NewMetrics()
+	sm := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("http.server.duration")
+	metric.Metadata().PutStr("prometheus.type", "histogram")
+	metric.Metadata().PutStr("prometheus.unit", "seconds")
+	metric.SetEmptyGauge().DataPoints().AppendEmpty().SetDoubleValue(0.35)
+
+	marshaler := &pmetric.ProtoMarshaler{}
+	data, err := marshaler.MarshalMetrics(metrics)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if err := printMetricMetadata(data); err != nil {
+		fmt.Println(err)
+	}
+	// Output:
+	// http.server.duration prometheus.type=histogram
+	// http.server.duration prometheus.unit=seconds
+}
+
+// printMetricMetadata prints every metric's metadata, keeping the example body
+// free of the error checks the lazy accessors require: each can fail, and
+// every iterator's error closure must be checked after its range.
+func printMetricMetadata(data []byte) error {
+	resources, resourcesErr := otlpwire.ExportMetricsServiceRequest(data).ResourceMetrics()
+	for rm := range resources {
+		scopes, scopesErr := rm.ScopeMetrics()
+		for sm := range scopes {
+			metrics, metricsErr := sm.Metrics()
+			for m := range metrics {
+				name, err := m.Name()
+				if err != nil {
+					return err
+				}
+				metadata, metadataErr := m.Metadata()
+				for kv := range metadata {
+					key, err := kv.Key()
+					if err != nil {
+						return err
+					}
+					value, _, err := kv.StringValue()
+					if err != nil {
+						return err
+					}
+					fmt.Printf("%s %s=%s\n", name, key, value)
+				}
+				if err := metadataErr(); err != nil {
+					return err
+				}
+			}
+			if err := metricsErr(); err != nil {
+				return err
+			}
+		}
+		if err := scopesErr(); err != nil {
+			return err
+		}
+	}
+	return resourcesErr()
+}
+
 // ExampleResourceLogs_Resource walks resource context and log records
 // without unmarshaling the OTLP request. It replaces the removed
 // ResourceLogs.StringAttribute: call Resource() to get the one, merged
