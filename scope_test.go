@@ -39,15 +39,7 @@ func scopeMessage(name, version string) []byte {
 // scopeWithStringAttr builds an InstrumentationScope carrying one string
 // attribute. Scope attributes are field 3; Resource attributes are field 1.
 func scopeWithStringAttr(key, value string) []byte {
-	anyValue := protowire.AppendTag(nil, 1, protowire.BytesType)
-	anyValue = protowire.AppendString(anyValue, value)
-
-	kv := protowire.AppendTag(nil, 1, protowire.BytesType)
-	kv = protowire.AppendString(kv, key)
-	kv = protowire.AppendTag(kv, 2, protowire.BytesType)
-	kv = protowire.AppendVarint(kv, uint64(len(anyValue)))
-	kv = append(kv, anyValue...)
-
+	kv := stringKeyValue(key, value)
 	out := protowire.AppendTag(nil, 3, protowire.BytesType)
 	out = protowire.AppendVarint(out, uint64(len(kv)))
 	return append(out, kv...)

@@ -302,36 +302,20 @@ func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 // singular messages.
 func extractLastBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 	var last []byte
-	pos := 0
+	var walkErr error
 
-	for pos < len(data) {
-		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
-		if tagLen < 0 {
-			return nil, errors.New("malformed protobuf tag")
+	forEachRepeatedField(data, fieldNum, func(item []byte, err error) bool {
+		if err != nil {
+			walkErr = err
+			return false
 		}
-		pos += tagLen
-
-		if num == fieldNum {
-			if wireType != protowire.BytesType {
-				return nil, errors.New("wrong wire type for field")
-			}
-			msgBytes, n := protowire.ConsumeBytes(data[pos:])
-			if n < 0 {
-				return nil, errors.New("invalid bytes in field")
-			}
-			// Clamped so a caller's append cannot overwrite sibling fields.
-			last = msgBytes[:len(msgBytes):len(msgBytes)]
-			pos += n
-			continue
-		}
-
-		n := skipField(data[pos:], num, wireType)
-		if n < 0 {
-			return nil, errors.New("failed to skip field")
-		}
-		pos += n
+		// Clamped so a caller's append cannot overwrite sibling fields.
+		last = item[:len(item):len(item)]
+		return true
+	})
+	if walkErr != nil {
+		return nil, walkErr
 	}
-
 	return last, nil
 }
 

@@ -54,10 +54,9 @@ func containerWithResources(resources ...[]byte) []byte {
 	return protowire.AppendVarint(out, 0)
 }
 
-// resourceWithStringAttr builds a Resource message carrying one string
-// attribute (Resource.attributes is field 1, KeyValue.key field 1,
-// KeyValue.value field 2, AnyValue.string_value field 1).
-func resourceWithStringAttr(key, value string) []byte {
+// stringKeyValue builds a KeyValue message with a string value (KeyValue.key
+// is field 1, KeyValue.value field 2, AnyValue.string_value field 1).
+func stringKeyValue(key, value string) []byte {
 	anyValue := protowire.AppendTag(nil, 1, protowire.BytesType)
 	anyValue = protowire.AppendString(anyValue, value)
 
@@ -65,8 +64,13 @@ func resourceWithStringAttr(key, value string) []byte {
 	kv = protowire.AppendString(kv, key)
 	kv = protowire.AppendTag(kv, 2, protowire.BytesType)
 	kv = protowire.AppendVarint(kv, uint64(len(anyValue)))
-	kv = append(kv, anyValue...)
+	return append(kv, anyValue...)
+}
 
+// resourceWithStringAttr builds a Resource message carrying one string
+// attribute. Resource.attributes is field 1.
+func resourceWithStringAttr(key, value string) []byte {
+	kv := stringKeyValue(key, value)
 	res := protowire.AppendTag(nil, 1, protowire.BytesType)
 	res = protowire.AppendVarint(res, uint64(len(kv)))
 	return append(res, kv...)
