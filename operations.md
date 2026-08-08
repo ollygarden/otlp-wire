@@ -22,7 +22,7 @@ this before releasing the module or changing a consumer rollout boundary.
 | Allocation regression | hypothesized | Higher GC/CPU in high-volume consumers | Extra copies, escaping closures, or full decode added to a hot path | Allocation tests and paired `-benchmem` benchmarks |
 | Consumer contract regression | observed in tests | Compile failure or changed routing/detector result after upgrade | Exported API, aliasing, iterator timing, or `WriteTo` bytes changed | Consumer-focused tests and canary comparison; the transitions below |
 | Benchmark-method error | observed | A performance claim or release decision rests on a delta that does not reproduce | A paired comparison run as sequential blocks (`go test -count=N`) instead of alternating invocations, or a gap claimed from overlapping ranges | Re-run alternating; see the release checklist below |
-| Accessor divergence on one message | hypothesized | Two accessors over the same message disagree on whether a payload is valid, so a consumer sees one field read succeed and the other fail on identical bytes | A second accessor added with its own parser instead of reading from the existing walk | Shared-walk implementation plus a malformed-parity test asserting both accessors fail together; see `TestLogRecordSeverity_MalformedParity` |
+| Accessor divergence on one message | hypothesized | Two accessors over the same message disagree on whether a payload is valid, so a consumer sees one field read succeed and the other fail on identical bytes | A second accessor added with its own parser instead of reading from the existing walk, or a new accessor scanning a message whose existing accessors scan differently | Shared-walk implementation plus a malformed-parity test asserting the accessors that share a schema-aware walk fail together; see `TestLogRecordSeverity_MalformedParity` and `TestSpanFields_MalformedParity`. Where accessors over one message deliberately do **not** share a walk, the divergence is pinned instead: `TestSpanIdentifiers_FirstMatchDivergence` |
 
 ### Known consumer-visible transitions in the API realignment
 
@@ -82,6 +82,60 @@ rejects a varint whose value exceeds `uint64` and a field number above
 `MaxInt32`, where the generated loop silently truncates both. A consumer
 cannot conclude "pdata would also reject this" from a wire-path error, nor the
 reverse.
+
+### Diagnosing the Span accessors
+
+`Name`, `Kind`, `StartTimeUnixNano` and `EndTimeUnixNano` share one
+schema-aware walk of the whole span, so those four can never disagree about
+whether a span is valid. `TraceID`, `SpanID` and `ParentSpanID` scan
+first-match and stop at their field. Three consequences when reading a
+consumer's CPU profile:
+
+- **Each scalar call walks the span once.** A consumer reading all four pays
+  four walks, several times the cost of a single-pass hand-rolled walk. A span
+  path showing that multiple is usually this, not a regression; it is still
+  well cheaper than the pdata unmarshal it replaces.
+- **The identifier accessors are cheap and unchanged**, and are not a
+  suspect when a span path slows down.
+- **Cost tracks field count, not payload size.** Unlike the LogRecord walk,
+  this one does not descend into `attributes`, `events`, `links` or `status`.
+  A span carrying large attribute values costs the same as one carrying small
+  ones at equal field counts.
+
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) carries the figures, with the fixture,
+environment and commands. Do not copy them here: a stale number in a runbook is
+worse than a pointer to a measured one. It also records why the identifier
+accessors were left on first-match, including how much a full walk would have
+cost them — the answer depends on the producer, because pdata marshals fields
+back-to-front and puts `trace_id` last where the SDK exporters put it first.
+
+**Known divergences from pdata.** These matter only to consumers that pair the
+wire path with a pdata fallback and expect the two to agree on validity. All
+are reachable only on malformed or adversarial input, never on conformant OTLP
+from a normal producer. `TestSpanFields_PdataDivergence` and
+`TestSpanIdentifiers_FirstMatchDivergence` pin each one, so a change in either
+direction shows up as a test failure rather than as silently different consumer
+behavior.
+
+| Input | Wire path | pdata |
+| --- | --- | --- |
+| Malformed contents inside a correctly framed `attributes`, `events`, `links` or `status` | accepts | rejects |
+| Repeated `trace_id`/`span_id`/`parent_span_id` | reports the **first** occurrence | reports the last |
+| Empty trailing `trace_id` after a populated one | reports the populated one | resets to zero |
+| Corruption located after an identifier | the identifier accessor accepts; the four scalar accessors reject | rejects |
+| Unknown group closing at the very end of the span | accepts | rejects (`unexpected EOF`) |
+| Unknown group closed with a field number that does not match its StartGroup | rejects | accepts |
+| Varint overflowing uint64 (10 bytes, final byte ≥ 2), in any varint field including a `name` length prefix | rejects | accepts (truncated) |
+| Field number above `MaxInt32` whose `int32` truncation is positive | rejects (`malformed protobuf tag`) | accepts (truncates, then skips) |
+
+Rows two to four are the price of leaving the identifier accessors on a
+first-match scan, and they are unreachable from a conformant producer, which
+emits each singular field exactly once. Row one follows from the walk being
+framing-only below the Span level; it is the one divergence class with no
+LogRecord equivalent, since `parseLogRecordSeverity` does descend into the body
+and attributes. [docs/DESIGN.md](docs/DESIGN.md) records both decisions. A
+consumer cannot conclude "pdata would also accept this" from a successful Span
+accessor read.
 
 ## Telemetry inventory
 

@@ -7,6 +7,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"go.olly.garden/otlp-wire"
 )
@@ -455,4 +456,96 @@ func hashBytes(data []byte) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write(data)
 	return h.Sum64()
+}
+
+// ExampleSpan_Kind finds slow internal spans without unmarshaling the request,
+// the shape overstory's internal-spans detector needs: filter on kind, then
+// read the name and the timestamps that give the duration.
+func ExampleSpan_Kind() {
+	traces := ptrace.NewTraces()
+	spans := traces.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty().Spans()
+
+	slow := spans.AppendEmpty()
+	slow.SetName("orders.reserve_stock")
+	slow.SetKind(ptrace.SpanKindInternal)
+	slow.SetStartTimestamp(1_700_000_000_000_000_000)
+	slow.SetEndTimestamp(1_700_000_000_250_000_000)
+
+	quick := spans.AppendEmpty()
+	quick.SetName("orders.validate")
+	quick.SetKind(ptrace.SpanKindInternal)
+	quick.SetStartTimestamp(1_700_000_000_000_000_000)
+	quick.SetEndTimestamp(1_700_000_000_000_400_000)
+
+	// A server span, skipped by the kind filter.
+	inbound := spans.AppendEmpty()
+	inbound.SetName("POST /orders")
+	inbound.SetKind(ptrace.SpanKindServer)
+
+	data, err := (&ptrace.ProtoMarshaler{}).MarshalTraces(traces)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// Each iterator's error closure must run even when the loop exits early,
+	// so accessor errors break out rather than returning past the check.
+	request := otlpwire.ExportTracesServiceRequest(data)
+	resources, resourceErr := request.ResourceSpans()
+	for resource := range resources {
+		scopes, scopeErr := resource.ScopeSpans()
+		for scopeSpans := range scopes {
+			spans, spanErr := scopeSpans.Spans()
+			for span := range spans {
+				if err := printInternalSpanDuration(span); err != nil {
+					fmt.Println(err)
+					break
+				}
+			}
+			if err := spanErr(); err != nil {
+				fmt.Println(err)
+				break
+			}
+		}
+		if err := scopeErr(); err != nil {
+			fmt.Println(err)
+			break
+		}
+	}
+	if err := resourceErr(); err != nil {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// orders.reserve_stock 250.00ms
+	// orders.validate 0.40ms
+}
+
+// printInternalSpanDuration reads kind first: each scalar accessor walks the
+// whole span, so the filter runs before the fields only it needs.
+func printInternalSpanDuration(span otlpwire.Span) error {
+	kind, err := span.Kind()
+	if err != nil {
+		return err
+	}
+	if kind != int32(ptrace.SpanKindInternal) {
+		return nil
+	}
+
+	name, err := span.Name()
+	if err != nil {
+		return err
+	}
+	start, err := span.StartTimeUnixNano()
+	if err != nil {
+		return err
+	}
+	end, err := span.EndTimeUnixNano()
+	if err != nil {
+		return err
+	}
+	if end > start {
+		fmt.Printf("%s %.2fms\n", name, float64(end-start)/1e6)
+	}
+	return nil
 }

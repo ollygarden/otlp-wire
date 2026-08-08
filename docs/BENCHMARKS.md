@@ -680,3 +680,105 @@ fields per record.
 
 Drop the hand-rolled arm and this subsection once sage moves to
 `LogRecord.SeverityText`.
+
+## Span field accessors (E-2945)
+
+**Environment for every measurement in this section:** 11th Gen Intel Core
+i7-11800H @ 2.30GHz, 16 threads, linux/amd64, Go 1.25.12, on a desktop with
+other work running. Paired comparisons are alternating invocations of prebuilt
+test binaries, reported as the median of the paired per-round deltas plus how
+many rounds carried the sign. Never `go test -count=N`: it runs a benchmark's
+iterations consecutively rather than interleaving the arms.
+
+**Fixture:** `createInternalSpansBenchTraces` — 5 resources × 100 spans, each
+with the three identifiers, a name, a kind cycling through five values, start
+and end timestamps and five attributes; every tenth span also carries an
+event. The attributes and events matter: they are what both walks step over to
+reach `start_time_unix_nano` and `end_time_unix_nano`.
+
+### The identifier accessors are unchanged
+
+`TraceID`, `SpanID` and `ParentSpanID` still scan first-match over
+`extractFixedBytesField` and stop at their field. `BenchmarkSpanIteration`
+against a merge-base checkout measures −4.3%, slower in 6 of 21 rounds — noise
+around zero, which is the expected result for byte-identical code.
+
+That is a deliberate asymmetry with the four scalar accessors, and the reason
+is cost, not principle. Resolving a scalar last-value-wins means walking to the
+end of the span, because nothing else proves a later occurrence does not exist.
+An identifier accessor that did the same would pay that on **every conformant
+span** to change behavior observable only on **malformed** ones, since a
+conformant producer emits each singular field exactly once.
+
+How much it would have cost depends on the producer, which is why measuring it
+against pdata-marshalled fixtures alone is misleading. pdata's
+`MarshalProto` writes fields back-to-front, so a collector-marshalled span
+carries `trace_id` **last** — a first-match scan already walks nearly the whole
+span and a full walk looks nearly free. Stock protobuf (protobuf-go, Java,
+Python — the OTLP SDK exporters) emits ascending order with `trace_id` first.
+Measured, `Span.TraceID()` on one ascending-order span against the first-match
+scan:
+
+| attributes on the span | first-match | full walk | ratio |
+|---|---:|---:|---:|
+| 5 | 13.0 ns | 133.8 ns | 10x |
+| 20 | 10.8 ns | 286.4 ns | 26x |
+| 50 | 10.7 ns | 619.0 ns | 58x |
+| 200 | 11.6 ns | 1,948 ns | 167x |
+
+Keep this in mind before moving any first-match accessor onto a full walk, and
+before quoting a Span benchmark built only from pdata-marshalled fixtures.
+
+### The four scalar accessors, against overstory's hand-rolled walk
+
+`readSpanFieldsHandRolled` is overstory's `internal/detector/wire.go` walk
+copied verbatim so the comparison reproduces from this repository alone. The
+arms are **not** equivalent work: overstory's reads all five fields in a single
+pass and checks the name for UTF-8 validity; here `TraceID` scans first-match
+and each of the four scalars walks the span once. Both arms run the same
+reduction — count internal spans, total their name lengths and durations.
+
+```bash
+go test -c -o /tmp/ow-after.test .
+for round in $(seq 1 15); do
+  for arm in _HandRolled _Accessors; do
+    /tmp/ow-after.test -test.run '^$' -test.benchmem -test.benchtime=300x \
+      -test.bench "^BenchmarkSpan_InternalSpans${arm}\$"
+  done
+done
+```
+
+| Benchmark | ns/op (median) | B/op | allocs/op |
+|---|---:|---:|---:|
+| `BenchmarkSpan_InternalSpans_HandRolled` | 86,236 | 552 | 24 |
+| `BenchmarkSpan_InternalSpans_Accessors` | 213,335 | 552 | 24 |
+| `BenchmarkSpan_InternalSpans_Unmarshal` (pdata) | 698,032 | 558,816 | 10,456 |
+| `BenchmarkSpan_TraceIDOnly` (first-match, control) | 68,486 | 528 | 24 |
+
+**About 151% slower than the hand-rolled walk** (median paired delta +151.4%),
+slower in 15 of 15 rounds, at **allocation parity**. The gap is the walk count,
+and it is conditional: the reduction calls `Kind()` on every span, then `Name()`
+and the two timestamps only on the spans that pass the internal-span filter.
+The fixture's kinds cycle through five values of which two are `Internal`, so
+the arm averages 1 + 0.4 x 3 = 2.2 scalar walks per span — plus one first-match
+`TraceID` scan — against the hand-rolled arm's single pass. A consumer reading
+all four scalars unconditionally would pay four.
+
+Read the comparison against the right baseline. overstory runs **pdata
+unmarshal** on `main` today; its wire walk lives on an unmerged branch.
+Migrating from pdata to these accessors is a **3.3x improvement** (698 µs to
+213 µs) and drops 10,456 allocations per batch to 24. Migrating from its
+hand-rolled walk is a 2.5x cost. Which number applies depends on which branch
+overstory migrates from, and that decision belongs on the migration issue.
+
+**No combined accessor exists yet, and these numbers are the argument for one.**
+`parseSpanFields` already produces all four scalars in a single walk, so
+exposing them together would need no new parsing machinery — only a decision
+about the exported shape. Per the flattened-convenience rule in E-2940 that
+needs a committed consumer on a measured hot path, and overstory reading four
+scalars per span is exactly that once its migration is decided. Until then the
+choice stays open, because the right shape depends on which fields the consumer
+actually takes.
+
+Drop the hand-rolled arm and this subsection once overstory moves to the Span
+accessors.

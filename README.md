@@ -11,7 +11,7 @@ OTLP wire format utilities for Go. Count, shard, and route telemetry data withou
 - Count signals (metrics/logs/traces) without unmarshaling
 - Iterate over resources with minimal allocations for parallel processing
 - Extract resource metadata for routing decisions
-- Access individual span fields (TraceID, SpanID, ParentSpanID) with zero allocations
+- Access individual span fields (identifiers, name, kind, timings) with zero allocations
 
 ## Performance Characteristics
 
@@ -35,7 +35,7 @@ See [BENCHMARKS.md](docs/BENCHMARKS.md) for detailed comparison.
 - **Observability**: Count signals for monitoring ingestion volume
 - **Sharding**: Split batches by resource for parallel processing
 - **Routing**: Extract resource attributes for routing decisions
-- **Span Processing**: Extract trace/span IDs without full unmarshal
+- **Span Processing**: Extract identifiers, name, kind and timings without full unmarshal
 
 ## Installation
 
@@ -137,7 +137,11 @@ ExportTracesServiceRequest (OTLP message bytes)
             └─ Span[] (individual spans)
                  ├─ TraceID()
                  ├─ SpanID()
-                 └─ ParentSpanID()
+                 ├─ ParentSpanID()
+                 ├─ Name()
+                 ├─ Kind()
+                 ├─ StartTimeUnixNano()
+                 └─ EndTimeUnixNano()
 
 InstrumentationScope (from any Scope())
   ├─ Name()
@@ -209,7 +213,19 @@ type Span []byte
 func (s Span) TraceID() ([16]byte, error)
 func (s Span) SpanID() ([8]byte, error)
 func (s Span) ParentSpanID() ([8]byte, error)
+func (s Span) Name() ([]byte, error)
+func (s Span) Kind() (int32, error)
+func (s Span) StartTimeUnixNano() (uint64, error)
+func (s Span) EndTimeUnixNano() (uint64, error)
 ```
+
+`Name`, `Kind` and the two timestamps share one schema-aware walk of the whole
+span, so those four can never disagree about whether a payload is valid. Each
+call runs that walk once. The identifier accessors scan first-match and stop,
+which is cheaper and identical on conformant OTLP. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the measured costs and
+[operations.md](operations.md) for where the two behaviors differ on malformed
+input.
 
 **Scope- and metric-level operations (metrics depth):**
 ```go
