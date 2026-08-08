@@ -292,33 +292,57 @@ func ExampleLogRecord_SeverityText() {
 
 func printLogSeverities(data []byte) error {
 	resources, resourcesErr := otlpwire.ExportLogsServiceRequest(data).ResourceLogs()
+	var failure error
 	for resourceLogs := range resources {
-		scopes, scopesErr := resourceLogs.ScopeLogs()
-		for scope := range scopes {
-			for record, err := range scope.LogRecordsSeq {
-				if err != nil {
-					return err
-				}
-				number, err := record.SeverityNumber()
-				if err != nil {
-					return err
-				}
-				text, err := record.SeverityText()
-				if err != nil {
-					return err
-				}
-				if text == nil {
-					fmt.Printf("severity=%d text=<unset>\n", number)
-					continue
-				}
-				fmt.Printf("severity=%d text=%s\n", number, text)
-			}
-		}
-		if err := scopesErr(); err != nil {
-			return err
+		if failure = printResourceLogSeverities(resourceLogs); failure != nil {
+			break
 		}
 	}
-	return resourcesErr()
+	// The error closure must be checked even when the loop exited early,
+	// so the split into one function per level is the point of this shape,
+	// not incidental.
+	if err := resourcesErr(); err != nil {
+		return err
+	}
+	return failure
+}
+
+func printResourceLogSeverities(resourceLogs otlpwire.ResourceLogs) error {
+	scopes, scopesErr := resourceLogs.ScopeLogs()
+	var failure error
+	for scope := range scopes {
+		if failure = printScopeLogSeverities(scope); failure != nil {
+			break
+		}
+	}
+	if err := scopesErr(); err != nil {
+		return err
+	}
+	return failure
+}
+
+// printScopeLogSeverities needs no closure check: LogRecordsSeq yields its
+// errors inline rather than deferring them.
+func printScopeLogSeverities(scope otlpwire.ScopeLogs) error {
+	for record, err := range scope.LogRecordsSeq {
+		if err != nil {
+			return err
+		}
+		number, err := record.SeverityNumber()
+		if err != nil {
+			return err
+		}
+		text, err := record.SeverityText()
+		if err != nil {
+			return err
+		}
+		if text == nil {
+			fmt.Printf("severity=%d text=<unset>\n", number)
+			continue
+		}
+		fmt.Printf("severity=%d text=%s\n", number, text)
+	}
+	return nil
 }
 
 // ExampleScopeLogs_Scope reads instrumentation scope identity and schema URL

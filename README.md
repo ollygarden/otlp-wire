@@ -267,7 +267,8 @@ func (r Resource) StringAttribute(key string) ([]byte, bool, error)
 
 `LogRecord.SeverityText` returns raw bytes aliasing the request buffer, and
 `nil` when `severity_text` is absent, which distinguishes an absent field from
-a present empty one. It shares `SeverityNumber`'s schema-aware walk of the
+a present empty one. Repeated occurrences resolve to the last, the protobuf
+singular-scalar rule. It shares `SeverityNumber`'s schema-aware walk of the
 whole LogRecord, so reading both fields costs two walks; see
 [docs/DESIGN.md](docs/DESIGN.md) for why they share one parser.
 

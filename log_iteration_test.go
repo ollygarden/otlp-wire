@@ -178,6 +178,72 @@ func TestLogRecordSeverityText_CompleteMessageSemantics(t *testing.T) {
 	require.Error(t, err, "every severity_text occurrence must use the bytes wire type")
 }
 
+// TestLogRecordSeverity_PdataDivergence pins the inputs where the shared
+// LogRecord walk and pdata disagree about validity. They are the exception to
+// the parity the rest of the suite asserts, they are all reachable only on
+// malformed or adversarial input, and operations.md documents them for
+// consumers that pair the wire path with a pdata fallback. The point is to
+// notice when one of them changes, in either direction.
+func TestLogRecordSeverity_PdataDivergence(t *testing.T) {
+	tests := []struct {
+		name        string
+		record      LogRecord
+		wireRejects bool
+	}{
+		{
+			name:        "well-formed group in an unknown field",
+			record:      appendUnknownGroup(severityNumberField(plog.SeverityNumberInfo), 90),
+			wireRejects: false,
+		},
+		{
+			// AnyValue body carrying a well-formed group in field 40.
+			name:        "well-formed group inside the body AnyValue",
+			record:      LogRecord{0x2a, 0x07, 0xc3, 0x02, 0xc8, 0x02, 0x01, 0xc4, 0x02},
+			wireRejects: false,
+		},
+		{
+			// 10-byte varint whose final byte is >= 2: protowire requires
+			// canonical encoding, pdata's generated loop does not.
+			name:        "non-canonical varint in severity_number",
+			record:      LogRecord{0x10, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02},
+			wireRejects: true,
+		},
+		{
+			name:        "non-canonical varint as the severity_text length",
+			record:      LogRecord{0x1a, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02, 'X'},
+			wireRejects: true,
+		},
+		{
+			// Field number 206695283200 truncates to a positive int32, so
+			// pdata skips it where protowire rejects the tag outright.
+			name:        "field number above MaxInt32 truncating positive",
+			record:      LogRecord{0x90, 0x90, 0x90, 0x90, 0x90, 0x30, 0x30},
+			wireRejects: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, textErr := tt.record.SeverityText()
+			_, numberErr := tt.record.SeverityNumber()
+			_, pdataErr := (&plog.ProtoUnmarshaler{}).UnmarshalLogs(exportLogsWithRecord(tt.record))
+
+			// The divergence is wire-versus-pdata. The two accessors still
+			// agree with each other, which is the property that matters.
+			require.Equal(t, textErr == nil, numberErr == nil,
+				"severity accessors must agree even where pdata disagrees with both")
+
+			if tt.wireRejects {
+				require.Error(t, textErr, "wire path must reject")
+				require.NoError(t, pdataErr, "pdata is documented as accepting this")
+				return
+			}
+			require.NoError(t, textErr, "wire path must accept")
+			require.Error(t, pdataErr, "pdata is documented as rejecting this")
+		})
+	}
+}
+
 // TestLogRecordSeverity_MalformedParity keeps the two severity accessors from
 // drifting apart: every malformed record fails both, and pdata rejects the
 // same bytes. It is the guard for the accessor-divergence risk in

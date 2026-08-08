@@ -66,7 +66,9 @@ consequences when reading a consumer's CPU profile:
 wire path with a pdata fallback and expect the two to agree on validity. All
 are reachable only on malformed or adversarial input, never on conformant OTLP
 from a normal producer, and none is specific to one accessor — they are
-properties of the shared LogRecord walk. No test covers them.
+properties of the shared LogRecord walk. `TestLogRecordSeverity_PdataDivergence`
+pins each one, so a change in either direction shows up as a test failure
+rather than as silently different consumer behavior.
 
 | Input | Wire path | pdata |
 | --- | --- | --- |
