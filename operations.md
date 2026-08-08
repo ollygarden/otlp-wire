@@ -73,14 +73,15 @@ rather than as silently different consumer behavior.
 | Input | Wire path | pdata |
 | --- | --- | --- |
 | Well-formed group in an unknown LogRecord field, or inside the body's `AnyValue` | accepts | rejects (`unexpected EOF`) |
-| Non-canonical 10-byte varint (10th byte ≥ 2), in any varint field including a `severity_text` length prefix | rejects | accepts |
+| Varint overflowing uint64 (10 bytes, final byte ≥ 2), in any varint field including a `severity_text` length prefix | rejects | accepts (truncated) |
 | Field number above `MaxInt32` whose `int32` truncation is positive | rejects (`malformed protobuf tag`) | accepts (truncates, then skips) |
 
 The first row is the mirror of the unclosed-group row above. The last two come
 from `protowire` being stricter than pdata's generated unmarshal: `protowire`
-enforces canonical varint encoding and rejects out-of-range field numbers,
-where the gogo-generated loop does neither. A consumer cannot conclude "pdata
-would also reject this" from a wire-path error, nor the reverse.
+rejects a varint whose value exceeds `uint64` and a field number above
+`MaxInt32`, where the generated loop silently truncates both. A consumer
+cannot conclude "pdata would also reject this" from a wire-path error, nor the
+reverse.
 
 ## Telemetry inventory
 

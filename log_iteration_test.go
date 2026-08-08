@@ -202,14 +202,16 @@ func TestLogRecordSeverity_PdataDivergence(t *testing.T) {
 			wireRejects: false,
 		},
 		{
-			// 10-byte varint whose final byte is >= 2: protowire requires
-			// canonical encoding, pdata's generated loop does not.
-			name:        "non-canonical varint in severity_number",
+			// A 10-byte varint carries at most bit 63 in its final byte, so
+			// a final byte >= 2 sets bits the uint64 cannot hold. protowire
+			// rejects the overflow; pdata's generated loop stops shifting at
+			// 64 bits and keeps the truncated value.
+			name:        "overflowing varint in severity_number",
 			record:      LogRecord{0x10, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02},
 			wireRejects: true,
 		},
 		{
-			name:        "non-canonical varint as the severity_text length",
+			name:        "overflowing varint as the severity_text length",
 			record:      LogRecord{0x1a, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02, 'X'},
 			wireRejects: true,
 		},
