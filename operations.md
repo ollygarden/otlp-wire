@@ -40,7 +40,7 @@ parity; all are pre-release, so no rollback of a shipped tag is involved.
 The canary decision and its measured pre/post comparison are recorded at
 release time, per "Release and production analysis" below. Confirm the canary
 consumer's telemetry is version-attributed first: see the uncovered-scenario
-note above.
+note under "Telemetry inventory" below.
 
 ## Telemetry inventory
 

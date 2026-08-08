@@ -2,6 +2,7 @@ package otlpwire
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -1070,7 +1071,17 @@ func scopeContainerWithRecords(n int) []byte {
 	out = protowire.AppendVarint(out, uint64(len(scope)))
 	out = append(out, scope...)
 
-	record := make([]byte, 64)
+	// A valid, decodable LogRecord body of a pinned size. The accessors under
+	// test never look inside a record — they read its tag and length and step
+	// over it — but an undecodable filler would be a trap for anyone who later
+	// makes this fixture do more. 64 bytes matches containerWithScopes above,
+	// so the two scaling benchmarks stay comparable.
+	record := protowire.AppendTag(nil, 5, protowire.BytesType) // LogRecord.body
+	body := protowire.AppendTag(nil, 1, protowire.BytesType)   // AnyValue.string_value
+	body = protowire.AppendString(body, strings.Repeat("x", 60))
+	record = protowire.AppendVarint(record, uint64(len(body)))
+	record = append(record, body...)
+
 	for i := 0; i < n; i++ {
 		out = protowire.AppendTag(out, 2, protowire.BytesType)
 		out = protowire.AppendVarint(out, uint64(len(record)))

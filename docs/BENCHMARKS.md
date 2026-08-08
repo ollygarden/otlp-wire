@@ -239,8 +239,9 @@ before/after comparison on identical hardware is what matters here).
 
 ## Scope, schema_url and Metric.Name (E-2942)
 
-E-2942 added `Scope()` and `SchemaUrl()` across all six containers, plus
-`InstrumentationScope` accessors, and changed `Metric.Name()` from
+E-2942 added `Scope()` to `ScopeMetrics`, `ScopeLogs` and `ScopeSpans`,
+`SchemaUrl()` to all six containers, and the `InstrumentationScope`
+accessors. It also changed `Metric.Name()` from
 first-match to protobuf singular-scalar (last-value-wins) resolution. Both
 new resolutions must scan the whole enclosing message, so these benchmarks
 quantify that scan and confirm the zero-allocation gates still hold.
