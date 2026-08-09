@@ -293,7 +293,10 @@ LogRecord, so they accept and reject exactly the same bytes; see
 [docs/DESIGN.md](docs/DESIGN.md) for why they share one parser. Each call runs
 that walk once, so `LogRecord.Severity` is the accessor for consumers reading
 both fields — the single-field pair costs a measured ~1.9x
-([docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
+([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). Its two results carry the contracts
+described above for each field. Ranking them is consumer policy: the library
+does not classify severity bands, nor decide which field wins when the number
+and the text disagree.
 
 `Resource.StringAttribute` is zero-copy and returns a separate `found` value,
 so a missing resource attribute can be distinguished from a present empty
