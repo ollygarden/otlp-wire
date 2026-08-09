@@ -264,11 +264,13 @@ func ExampleResourceLogs_Resource() {
 	// Output: checkout severity=13
 }
 
-// ExampleLogRecord_SeverityText reads both severity fields together, which is
-// what a severity gate needs: the number orders records, the text carries the
-// producer's own label. SeverityText returns a view into the request buffer,
-// and nil distinguishes an absent severity_text from a present empty one.
-func ExampleLogRecord_SeverityText() {
+// ExampleLogRecord_Severity reads both severity fields together, which is what
+// a severity gate needs: the number orders records, the text carries the
+// producer's own label. Severity returns the pair from one walk of the record,
+// where the single-field accessors would each run that walk again. The text is
+// a view into the request buffer, and nil distinguishes an absent
+// severity_text from a present empty one.
+func ExampleLogRecord_Severity() {
 	logs := plog.NewLogs()
 	records := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords()
 	labelled := records.AppendEmpty()
@@ -329,11 +331,7 @@ func printScopeLogSeverities(scope otlpwire.ScopeLogs) error {
 		if err != nil {
 			return err
 		}
-		number, err := record.SeverityNumber()
-		if err != nil {
-			return err
-		}
-		text, err := record.SeverityText()
+		number, text, err := record.Severity()
 		if err != nil {
 			return err
 		}

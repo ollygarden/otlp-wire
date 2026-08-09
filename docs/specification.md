@@ -376,12 +376,17 @@ distinction pdata cannot represent; both compare equal to `""`. Repeated
 occurrences resolve to the last one, as protobuf and pdata do for a singular
 scalar.
 
-Both severity accessors read from one schema-aware walk of the whole
-LogRecord, so they accept and reject exactly the same bytes. Each call runs
-that walk once, so a consumer reading both fields pays for two.
+`LogRecord.Severity` returns both fields at once, each carrying the contract
+its single-field accessor states. It is the accessor for consumers reading both
+per record: every accessor runs the walk once, so the single-field pair costs
+two walks where `Severity` costs one.
 
-The library does not classify severity bands or combine severity number with
-severity text. That remains consumer policy.
+All three severity accessors read from one schema-aware walk of the whole
+LogRecord, so they accept and reject exactly the same bytes.
+
+The library does not classify severity bands, and `Severity` returning the two
+fields together does not rank them: which one wins when the number and the text
+disagree remains consumer policy.
 
 ### Trace depth
 

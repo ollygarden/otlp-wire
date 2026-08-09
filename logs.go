@@ -112,7 +112,8 @@ func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) {
 // SeverityNumber returns the LogRecord severity_number enum (field 2).
 // It returns 0 when the field is absent. Values are represented as int32 so
 // that unexpected negative protobuf enum values remain distinguishable from
-// the positive OTLP severity ranges.
+// the positive OTLP severity ranges. Use Severity to read both severity fields
+// from one walk.
 func (r LogRecord) SeverityNumber() (int32, error) {
 	number, _, err := parseLogRecordSeverity([]byte(r))
 	return number, err
@@ -125,10 +126,22 @@ func (r LogRecord) SeverityNumber() (int32, error) {
 //
 // Validation matches SeverityNumber: both read the same schema-aware walk of
 // the whole LogRecord, so an early severity_text cannot conceal corruption
-// that follows it.
+// that follows it. Use Severity to read both severity fields from one walk.
 func (r LogRecord) SeverityText() ([]byte, error) {
 	_, text, err := parseLogRecordSeverity([]byte(r))
 	return text, err
+}
+
+// Severity returns severity_number (field 2) and severity_text (field 3) from
+// one walk of the record. SeverityNumber and SeverityText each run that walk
+// once, so a consumer reading both fields separately pays for two.
+//
+// Each value carries the contract its single-field accessor documents.
+//
+// These are the raw wire fields. Classifying them into severity bands, and
+// deciding which one wins when they disagree, stay consumer policy.
+func (r LogRecord) Severity() (int32, []byte, error) {
+	return parseLogRecordSeverity([]byte(r))
 }
 
 // countLogRecords counts the number of log records in an OTLP

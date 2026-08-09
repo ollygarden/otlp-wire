@@ -1406,47 +1406,10 @@ func BenchmarkMetric_Metadata_Seq(b *testing.B) {
 	}
 }
 
-// ========== LogRecord.SeverityText ==========
+// ========== LogRecord severity accessors ==========
 
-// benchSeverityTextSink prevents the severity-text arms from being optimized
-// away.
-var benchSeverityTextSink int
-
-// logRecordSeverityTextHandRolled is the field-3 walk sage hand-rolls in
-// internal/event/wire.go, copied verbatim as the "before" arm so the
-// comparison reproduces from this repository alone. It is deliberately not
-// equivalent work: it stops at field 3 and materializes a string, where
-// LogRecord.SeverityText validates every known LogRecord field and returns a
-// view. Drop this arm and its docs/BENCHMARKS.md section once sage moves to
-// LogRecord.SeverityText.
-func logRecordSeverityTextHandRolled(data []byte) (string, error) {
-	var text []byte
-	for len(data) > 0 {
-		num, typ, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return "", errors.New("malformed protobuf tag in log record")
-		}
-		data = data[n:]
-		if num == 3 {
-			if typ != protowire.BytesType {
-				return "", errors.New("wrong wire type for severity_text")
-			}
-			value, m := protowire.ConsumeBytes(data)
-			if m < 0 {
-				return "", errors.New("malformed severity_text field")
-			}
-			text = value
-			data = data[m:]
-			continue
-		}
-		n = protowire.ConsumeFieldValue(num, typ, data)
-		if n < 0 {
-			return "", errors.New("malformed field in log record")
-		}
-		data = data[n:]
-	}
-	return string(text), nil
-}
+// benchSeveritySink prevents the severity arms from being optimized away.
+var benchSeveritySink int
 
 func benchSeverityTextPayload(b *testing.B) []byte {
 	b.Helper()
@@ -1480,24 +1443,8 @@ func forEachBenchLogRecord(b *testing.B, payload []byte, fn func(LogRecord)) {
 	}
 }
 
-func BenchmarkLogRecord_SeverityText_HandRolled(b *testing.B) {
-	payload := benchSeverityTextPayload(b)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		total := 0
-		forEachBenchLogRecord(b, payload, func(record LogRecord) {
-			text, err := logRecordSeverityTextHandRolled([]byte(record))
-			if err != nil {
-				b.Fatal(err)
-			}
-			total += len(text)
-		})
-		benchSeverityTextSink = total
-	}
-}
-
+// BenchmarkLogRecord_SeverityText is the single-field baseline: one walk per
+// record, which is what a consumer reading only severity_text pays.
 func BenchmarkLogRecord_SeverityText(b *testing.B) {
 	payload := benchSeverityTextPayload(b)
 
@@ -1512,7 +1459,51 @@ func BenchmarkLogRecord_SeverityText(b *testing.B) {
 			}
 			total += len(text)
 		})
-		benchSeverityTextSink = total
+		benchSeveritySink = total
+	}
+}
+
+// BenchmarkLogRecord_SeverityNumberAndText reads both fields through the
+// single-field accessors, which runs the shared walk twice per record. It is
+// the arm BenchmarkLogRecord_Severity replaces; keep the two doing identical
+// work at the call site so the delta is the second walk and nothing else.
+func BenchmarkLogRecord_SeverityNumberAndText(b *testing.B) {
+	payload := benchSeverityTextPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		total := 0
+		forEachBenchLogRecord(b, payload, func(record LogRecord) {
+			number, err := record.SeverityNumber()
+			if err != nil {
+				b.Fatal(err)
+			}
+			text, err := record.SeverityText()
+			if err != nil {
+				b.Fatal(err)
+			}
+			total += int(number) + len(text)
+		})
+		benchSeveritySink = total
+	}
+}
+
+func BenchmarkLogRecord_Severity(b *testing.B) {
+	payload := benchSeverityTextPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		total := 0
+		forEachBenchLogRecord(b, payload, func(record LogRecord) {
+			number, text, err := record.Severity()
+			if err != nil {
+				b.Fatal(err)
+			}
+			total += int(number) + len(text)
+		})
+		benchSeveritySink = total
 	}
 }
 
