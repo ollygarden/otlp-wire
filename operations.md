@@ -153,7 +153,7 @@ siblings, from the OTLP `InstrumentationLibrary` → `Scope` transition. The
 traversal treats it as an unknown field: framing is checked, contents are not,
 and the records inside are **not** traversed.
 
-That is a deliberate deviation from pdata, taken on the reasoning below. It is
+That is a deliberate deviation from pdata, made for the reasons below. It is
 recorded here rather than fixed, so a consumer investigating a count that looks
 low can rule it in or out quickly.
 
