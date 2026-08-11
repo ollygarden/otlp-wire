@@ -39,8 +39,8 @@ code is split by domain: public types in `types.go`, signal traversal in
 `attributes.go`, signal-generic instrumentation-scope accessors in `scope.go`,
 and low-level protobuf walking in `wire.go`. Functional tests are in
 `otlpwire_test.go`, `log_iteration_test.go`, `resource_test.go`,
-`scope_test.go`, and `metric_metadata_test.go`, usage examples in
-`example_test.go`, and comparative benchmarks in
+`scope_test.go`, `metric_metadata_test.go`, and `span_fields_test.go`, usage
+examples in `example_test.go`, and comparative benchmarks in
 `benchmark_comparison_test.go`.
 
 Public wire types are byte slices or small wrappers over byte slices. They
