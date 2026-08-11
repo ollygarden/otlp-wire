@@ -499,6 +499,9 @@ Past feature rollouts established the following sequence:
 | v0.0.3 | Metrics-depth traversal and zero-allocation variants (E-2608, PR #18) | Release the primitive first, then migrate metrics consumers such as Marigold with parity and production evidence |
 | v0.0.4 | Log traversal, severity and resource strings (E-2892, PR #22) | Release the primitive first, then use separate Bindweed, Mulch and Sage adoption issues (E-2900, E-2905, E-2906) |
 | v0.1.0 (released 2026-08-07) | Typed, absence-tolerant, merged `Resource()`; removes `ResourceLogs.StringAttribute` (E-2941) | Breaking: `Resource()` now returns `(Resource, error)` (direct calls stay compatible since `Resource` assigns to `[]byte`, but interfaces and method values typed on the old signature must be updated) and no longer errors on an absent Resource field; `rl.StringAttribute(k)` callers migrate to `rl.Resource()` then `res.StringAttribute(k)`. Release the primitive, then coordinate consumer releases per the acceptance gates below before broad upgrades |
+| v0.2.0 (released 2026-08-08) | `InstrumentationScope` and `SchemaUrl` on every container (E-2942); `Metric.Metadata` and `MetadataSeq` (E-2943); `LogRecord.SeverityText` (E-2944) | Breaking: `Scope()` replaces per-container scope handling and the singular-scalar accessors report corruption located after the last relevant occurrence. Marigold adopts `Metric.Metadata` per E-2952 |
+| v0.2.1 (released 2026-08-08) | `Span` name, kind and start/end timestamps (E-2945) | Additive. Overstory adopts the accessors per E-2964, which also retires the hand-rolled comparison arm |
+| v0.2.2 (released 2026-08-09) | `LogRecord.Severity`, both severity fields from one walk (E-2957) | Additive. Sage adopted it in E-2954 and measured −33% CPU and −94.7% allocations on text-only payloads |
 
 Future capabilities and refactors should follow the same staged model:
 

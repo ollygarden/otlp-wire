@@ -145,6 +145,38 @@ and attributes. [docs/DESIGN.md](docs/DESIGN.md) records both decisions. A
 consumer cannot conclude "pdata would also accept this" from a successful Span
 accessor read.
 
+### The deprecated scope containers (field 1000)
+
+`ResourceLogs`, `ResourceSpans` and `ResourceMetrics` each carry a field 1000
+holding the pre-rename scope container — `deprecated_scope_logs` and its
+siblings, from the OTLP `InstrumentationLibrary` → `Scope` transition. The
+traversal treats it as an unknown field: framing is checked, contents are not,
+and the records inside are **not** traversed.
+
+That is a deliberate deviation from pdata, made for the reasons below. It is
+recorded here rather than fixed, so a consumer investigating a count that looks
+low can rule it in or out quickly.
+
+| Input | Wire path | pdata |
+| --- | --- | --- |
+| Wrong wire type on field 1000 | accepts | rejects (`wrong wireType ... for field DeprecatedScopeLogs`) |
+| Well-formed records in field 1000, none in field 2 | counts zero, no error | `plog.ProtoUnmarshaler` also counts zero; `plogotlp.ExportRequest` and the gRPC server path migrate them and count them |
+
+The second row is the one that could bite, and it depends on which pdata door a
+consumer uses. `otlp.MigrateLogs` promotes field 1000 into `ScopeLogs` when
+`ScopeLogs` is empty, but it is called only from `plogotlp/grpc.go`,
+`plogotlp/request.go` and `plog/json.go` — **not** from `plog.ProtoUnmarshaler`,
+despite that function's own comment requiring every unmarshaler to call it. The
+downstream consumers use `ProtoUnmarshaler`, so they and the wire path agree.
+Raincatcher, at the ingest edge, uses the migrating API; whether a field-1000
+payload can reach downstream at all therefore depends on whether raincatcher
+re-marshals after pdata migrates it, which has not been established.
+
+No producer has emitted field 1000 in years, which is why this is accepted
+rather than closed. If a consumer ever reports logs, spans or metrics counted as
+zero on a payload another tool reads as non-empty, check for field 1000 before
+anything else. E-2976 holds the full measurements.
+
 ## Telemetry inventory
 
 The library emits no telemetry. Importing services own throughput, error,
