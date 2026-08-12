@@ -35,5 +35,5 @@ func (s InstrumentationScope) Attributes() (iter.Seq[KeyValue], func() error) {
 // directly. On a parse error it yields a nil KeyValue with a non-nil error and
 // stops.
 func (s InstrumentationScope) AttributesSeq(yield func(KeyValue, error) bool) {
-	keyValueSeq([]byte(s), 3, yield)
+	repeatedFieldSeq2([]byte(s), 3, yield)
 }

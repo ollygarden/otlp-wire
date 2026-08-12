@@ -49,7 +49,7 @@ func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error) {
 //
 // On a parse error it yields a nil KeyValue with a non-nil error and stops.
 func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool) {
-	keyValueSeq(d.raw, d.attributesFieldNum(), yield)
+	repeatedFieldSeq2(d.raw, d.attributesFieldNum(), yield)
 }
 
 // DataPointCount returns the total number of metric data points in the batch.
@@ -186,7 +186,7 @@ func (m Metric) Metadata() (iter.Seq[KeyValue], func() error) {
 // iter.Seq2[KeyValue, error] and meant to be ranged over directly. On a parse
 // error it yields a nil KeyValue with a non-nil error and stops.
 func (m Metric) MetadataSeq(yield func(KeyValue, error) bool) {
-	keyValueSeq([]byte(m), 12, yield)
+	repeatedFieldSeq2([]byte(m), 12, yield)
 }
 
 // DataPoints returns an iterator over datapoints in this Metric, descending

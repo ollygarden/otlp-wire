@@ -549,6 +549,25 @@ lazy error timing and early-stop behavior. Metrics and traces expose the same
 sequence forms because their resource/scope container layout and escape
 behavior are identical; `TestContainerSeq_ZeroAllocations` pins all three.
 
+E-3051 measured whether those ordinary adapter bodies could be replaced by
+direct calls to the existing generic `repeatedFieldSeq` helper. On the same
+i7-11800H / linux-amd64 / Go 1.25.12 environment, 15 alternating invocations
+of prebuilt before/after test binaries kept the counts at 15 and 45 allocs/op
+but added exactly 24 B/op to both shapes (424 → 448 and 1,264 → 1,288). A
+generic method-value adapter was worse at 27/87 allocs and 720/2,281 B/op.
+The explicit ordinary adapters are therefore performance-bearing under the
+supported compiler and remain intentionally duplicated.
+
+The same issue removed the type-specific `keyValueSeq` wrapper and routed the
+four allocation-free KeyValue APIs directly through `repeatedFieldSeq2`.
+Fifteen alternating before/after invocations (`-benchtime=200x`) of
+`BenchmarkMetric_Metadata_Seq` and
+`BenchmarkMetrics_ScrapeDeepIterationSeq_WireFormat` were indistinguishable:
+the after arm was slower in 7/15 and 6/15 pairs respectively, with median
+paired deltas of about +0.4% and -1.2%. The dedicated allocation tests for
+resource, scope, metadata and datapoint attribute sequences remain the
+zero-allocation gate.
+
 ## Log severity classification (E-2892)
 
 This benchmark models an insight consumer that reads resource context through
