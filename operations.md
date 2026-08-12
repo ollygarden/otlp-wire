@@ -202,6 +202,13 @@ contract. `TestContainerSeq_ZeroAllocations` is the library gate; production
 impact must still be established in the importing service because this module
 emits no allocation or GC telemetry of its own.
 
+The ordinary adapter bodies are intentionally explicit rather than delegated
+to `repeatedFieldSeq`. E-3051 measured that seemingly mechanical cleanup at an
+additional 24 B per `BenchmarkContainerSeq` operation with no allocation-count
+or credible runtime benefit under Go 1.25.12. If a future compiler changes
+escape behavior, rerun that benchmark with alternating prebuilt binaries
+before trying the consolidation again.
+
 ## Release and production analysis
 
 1. Verify race tests, vet, malformed-wire coverage, allocation gates, and

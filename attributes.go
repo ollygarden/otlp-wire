@@ -32,21 +32,6 @@ func (kv KeyValue) StringValue() ([]byte, bool, error) {
 	return value.stringValue, true, nil
 }
 
-// keyValueSeq walks the repeated KeyValue field at fieldNum, yielding each
-// element inline. The field number differs per container, so the caller
-// supplies it and documents its own choice. On a parse error it yields a nil
-// KeyValue with a non-nil error and stops. Nothing escapes, so iterating
-// allocates nothing.
-func keyValueSeq(data []byte, fieldNum protowire.Number, yield func(KeyValue, error) bool) {
-	forEachRepeatedField(data, fieldNum, func(rb []byte, err error) bool {
-		if err != nil {
-			yield(nil, err)
-			return false
-		}
-		return yield(KeyValue(rb), nil)
-	})
-}
-
 // Attributes returns an iterator over the Resource's attribute KeyValues.
 // The returned function should be called after iteration to check for errors.
 func (r Resource) Attributes() (iter.Seq[KeyValue], func() error) {
@@ -58,7 +43,7 @@ func (r Resource) Attributes() (iter.Seq[KeyValue], func() error) {
 // directly. On a parse error it yields a nil KeyValue with a non-nil error and
 // stops.
 func (r Resource) AttributesSeq(yield func(KeyValue, error) bool) {
-	keyValueSeq([]byte(r), 1, yield)
+	repeatedFieldSeq2([]byte(r), 1, yield)
 }
 
 // StringAttribute returns the string value of the first resource attribute
