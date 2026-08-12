@@ -22,6 +22,19 @@ func repeatedFieldSeq[T ~[]byte](data []byte, fieldNum protowire.Number) (iter.S
 	return seq, func() error { return iterErr }
 }
 
+// repeatedFieldSeq2 is the allocation-free form of repeatedFieldSeq. Public
+// methods with this shape are meant to be ranged over directly as method
+// values, keeping the consumer's loop body on the stack.
+func repeatedFieldSeq2[T ~[]byte](data []byte, fieldNum protowire.Number, yield func(T, error) bool) {
+	forEachRepeatedField(data, fieldNum, func(item []byte, err error) bool {
+		if err != nil {
+			yield(nil, err)
+			return false
+		}
+		return yield(T(item), nil)
+	})
+}
+
 // skipField skips a field value after its tag has been consumed. The field
 // number is required for groups so ConsumeFieldValue can verify the matching
 // end-group marker and recursively validate its contents.

@@ -25,7 +25,7 @@ otlp-wire operates on wire format bytes:
 - 35-55x faster counting than unmarshaling (zero allocations)
 - 1,100-2,800x faster iteration than unmarshal+iterate (2 allocations)
 - 2,800-3,700x faster splitting than unmarshal+remarshal (2 allocations)
-- Minimal GC pressure (only 24 bytes per batch for error handling)
+- Zero-allocation sequence variants for hot container and per-element walks
 - Zero dependencies (only stdlib + protowire)
 
 See [BENCHMARKS.md](docs/BENCHMARKS.md) for detailed comparison.
@@ -157,14 +157,17 @@ InstrumentationScope (from any Scope())
 type ExportMetricsServiceRequest []byte
 func (m ExportMetricsServiceRequest) DataPointCount() (int, error)
 func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics], func() error)
+func (m ExportMetricsServiceRequest) ResourceMetricsSeq(yield func(ResourceMetrics, error) bool)
 
 type ExportLogsServiceRequest []byte
 func (l ExportLogsServiceRequest) LogRecordCount() (int, error)
 func (l ExportLogsServiceRequest) ResourceLogs() (iter.Seq[ResourceLogs], func() error)
+func (l ExportLogsServiceRequest) ResourceLogsSeq(yield func(ResourceLogs, error) bool)
 
 type ExportTracesServiceRequest []byte
 func (t ExportTracesServiceRequest) SpanCount() (int, error)
 func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], func() error)
+func (t ExportTracesServiceRequest) ResourceSpansSeq(yield func(ResourceSpans, error) bool)
 ```
 
 **Resource-level operations:**
@@ -174,6 +177,8 @@ func (r ResourceMetrics) DataPointCount() (int, error)
 func (r ResourceMetrics) Resource() (Resource, error)
 func (r ResourceMetrics) SchemaUrl() ([]byte, error)
 func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error)
+func (r ResourceMetrics) ScopeMetrics() (iter.Seq[ScopeMetrics], func() error)
+func (r ResourceMetrics) ScopeMetricsSeq(yield func(ScopeMetrics, error) bool)
 
 type ResourceLogs []byte
 func (r ResourceLogs) LogRecordCount() (int, error)
@@ -181,6 +186,7 @@ func (r ResourceLogs) Resource() (Resource, error)
 func (r ResourceLogs) SchemaUrl() ([]byte, error)
 func (r ResourceLogs) WriteTo(w io.Writer) (int64, error)
 func (r ResourceLogs) ScopeLogs() (iter.Seq[ScopeLogs], func() error)
+func (r ResourceLogs) ScopeLogsSeq(yield func(ScopeLogs, error) bool)
 
 type ResourceSpans []byte
 func (r ResourceSpans) SpanCount() (int, error)
@@ -188,6 +194,7 @@ func (r ResourceSpans) Resource() (Resource, error)
 func (r ResourceSpans) SchemaUrl() ([]byte, error)
 func (r ResourceSpans) WriteTo(w io.Writer) (int64, error)
 func (r ResourceSpans) ScopeSpans() (iter.Seq[ScopeSpans], func() error)
+func (r ResourceSpans) ScopeSpansSeq(yield func(ScopeSpans, error) bool)
 ```
 
 **Instrumentation scope (all three signals):**

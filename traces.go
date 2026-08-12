@@ -13,10 +13,29 @@ func (t ExportTracesServiceRequest) SpanCount() (int, error) {
 	return countSpans([]byte(t))
 }
 
-// ResourceSpans returns an iterator over ResourceSpans in the batch.
-// The returned function should be called after iteration to check for errors.
+// ResourceSpans returns an iterator over ResourceSpans in the batch. The
+// returned function should be called after iteration to check for errors.
+// ResourceSpans is a thin adapter over ResourceSpansSeq.
 func (t ExportTracesServiceRequest) ResourceSpans() (iter.Seq[ResourceSpans], func() error) {
-	return repeatedFieldSeq[ResourceSpans]([]byte(t), 1)
+	var iterErr error
+	seq := func(yield func(ResourceSpans) bool) {
+		t.ResourceSpansSeq(func(resource ResourceSpans, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(resource)
+		})
+	}
+	return seq, func() error { return iterErr }
+}
+
+// ResourceSpansSeq is the zero-allocation alternative to ResourceSpans. It is
+// shaped like iter.Seq2[ResourceSpans, error] and meant to be ranged over
+// directly. On a parse error it yields a nil ResourceSpans with a non-nil
+// error and stops.
+func (t ExportTracesServiceRequest) ResourceSpansSeq(yield func(ResourceSpans, error) bool) {
+	repeatedFieldSeq2([]byte(t), 1, yield)
 }
 
 // SpanCount returns the number of spans in this resource.
@@ -52,8 +71,26 @@ func (r ResourceSpans) WriteTo(w io.Writer) (int64, error) {
 // ScopeSpans returns an iterator over ScopeSpans in this ResourceSpans.
 // Field 2 in the ResourceSpans protobuf message.
 // The returned function should be called after iteration to check for errors.
+// ScopeSpans is a thin adapter over ScopeSpansSeq.
 func (r ResourceSpans) ScopeSpans() (iter.Seq[ScopeSpans], func() error) {
-	return repeatedFieldSeq[ScopeSpans]([]byte(r), 2)
+	var iterErr error
+	seq := func(yield func(ScopeSpans) bool) {
+		r.ScopeSpansSeq(func(scope ScopeSpans, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(scope)
+		})
+	}
+	return seq, func() error { return iterErr }
+}
+
+// ScopeSpansSeq is the zero-allocation alternative to ScopeSpans. It is shaped
+// like iter.Seq2[ScopeSpans, error] and meant to be ranged over directly. On a
+// parse error it yields a nil ScopeSpans with a non-nil error and stops.
+func (r ResourceSpans) ScopeSpansSeq(yield func(ScopeSpans, error) bool) {
+	repeatedFieldSeq2([]byte(r), 2, yield)
 }
 
 // SpanCount returns the number of spans in this ScopeSpans.

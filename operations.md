@@ -186,6 +186,22 @@ production validation.
 **Uncovered scenarios:** A consumer without version-attributed processing and
 queue telemetry cannot distinguish an idle path from a parser regression.
 
+### Diagnosing container-iterator allocations
+
+The ordinary request/resource iterators return closures and an error function.
+When a consumer ranges over one of those function-typed values, its loop body
+and captured state may escape to the heap once per opened iterator. The effect
+scales with resource and scope count, so a record-heavy benchmark can hide a
+cost that becomes material on resource-heavy traffic.
+
+Hot paths can range directly over `ResourceMetricsSeq`/`ScopeMetricsSeq`,
+`ResourceLogsSeq`/`ScopeLogsSeq`, or `ResourceSpansSeq`/`ScopeSpansSeq` to
+receive errors inline and keep container traversal allocation-free. The
+ordinary methods remain the ergonomic form and preserve their deferred-error
+contract. `TestContainerSeq_ZeroAllocations` is the library gate; production
+impact must still be established in the importing service because this module
+emits no allocation or GC telemetry of its own.
+
 ## Release and production analysis
 
 1. Verify race tests, vet, malformed-wire coverage, allocation gates, and
