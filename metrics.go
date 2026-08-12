@@ -57,10 +57,29 @@ func (m ExportMetricsServiceRequest) DataPointCount() (int, error) {
 	return countMetricDataPoints([]byte(m))
 }
 
-// ResourceMetrics returns an iterator over ResourceMetrics in the batch.
-// The returned function should be called after iteration to check for errors.
+// ResourceMetrics returns an iterator over ResourceMetrics in the batch. The
+// returned function should be called after iteration to check for errors.
+// ResourceMetrics is a thin adapter over ResourceMetricsSeq.
 func (m ExportMetricsServiceRequest) ResourceMetrics() (iter.Seq[ResourceMetrics], func() error) {
-	return repeatedFieldSeq[ResourceMetrics]([]byte(m), 1)
+	var iterErr error
+	seq := func(yield func(ResourceMetrics) bool) {
+		m.ResourceMetricsSeq(func(resource ResourceMetrics, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(resource)
+		})
+	}
+	return seq, func() error { return iterErr }
+}
+
+// ResourceMetricsSeq is the zero-allocation alternative to ResourceMetrics.
+// It is shaped like iter.Seq2[ResourceMetrics, error] and meant to be ranged
+// over directly. On a parse error it yields a nil ResourceMetrics with a
+// non-nil error and stops.
+func (m ExportMetricsServiceRequest) ResourceMetricsSeq(yield func(ResourceMetrics, error) bool) {
+	repeatedFieldSeq2([]byte(m), 1, yield)
 }
 
 // DataPointCount returns the number of metric data points in this resource.
@@ -96,8 +115,27 @@ func (r ResourceMetrics) WriteTo(w io.Writer) (int64, error) {
 // ScopeMetrics returns an iterator over ScopeMetrics in this ResourceMetrics.
 // Field 2 in the ResourceMetrics protobuf message.
 // The returned function should be called after iteration to check for errors.
+// ScopeMetrics is a thin adapter over ScopeMetricsSeq.
 func (r ResourceMetrics) ScopeMetrics() (iter.Seq[ScopeMetrics], func() error) {
-	return repeatedFieldSeq[ScopeMetrics]([]byte(r), 2)
+	var iterErr error
+	seq := func(yield func(ScopeMetrics) bool) {
+		r.ScopeMetricsSeq(func(scope ScopeMetrics, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(scope)
+		})
+	}
+	return seq, func() error { return iterErr }
+}
+
+// ScopeMetricsSeq is the zero-allocation alternative to ScopeMetrics. It is
+// shaped like iter.Seq2[ScopeMetrics, error] and meant to be ranged over
+// directly. On a parse error it yields a nil ScopeMetrics with a non-nil error
+// and stops.
+func (r ResourceMetrics) ScopeMetricsSeq(yield func(ScopeMetrics, error) bool) {
+	repeatedFieldSeq2([]byte(r), 2, yield)
 }
 
 // Scope returns the InstrumentationScope for this ScopeMetrics. It returns

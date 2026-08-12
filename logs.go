@@ -13,10 +13,29 @@ func (l ExportLogsServiceRequest) LogRecordCount() (int, error) {
 	return countLogRecords([]byte(l))
 }
 
-// ResourceLogs returns an iterator over ResourceLogs in the batch.
-// The returned function should be called after iteration to check for errors.
+// ResourceLogs returns an iterator over ResourceLogs in the batch. The
+// returned function should be called after iteration to check for errors.
+// ResourceLogs is a thin adapter over ResourceLogsSeq.
 func (l ExportLogsServiceRequest) ResourceLogs() (iter.Seq[ResourceLogs], func() error) {
-	return repeatedFieldSeq[ResourceLogs]([]byte(l), 1)
+	var iterErr error
+	seq := func(yield func(ResourceLogs) bool) {
+		l.ResourceLogsSeq(func(resource ResourceLogs, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(resource)
+		})
+	}
+	return seq, func() error { return iterErr }
+}
+
+// ResourceLogsSeq is the zero-allocation alternative to ResourceLogs. It is
+// shaped like iter.Seq2[ResourceLogs, error] and meant to be ranged over
+// directly. On a parse error it yields a nil ResourceLogs with a non-nil error
+// and stops.
+func (l ExportLogsServiceRequest) ResourceLogsSeq(yield func(ResourceLogs, error) bool) {
+	repeatedFieldSeq2([]byte(l), 1, yield)
 }
 
 // LogRecordCount returns the number of log records in this resource.
@@ -52,8 +71,26 @@ func (r ResourceLogs) WriteTo(w io.Writer) (int64, error) {
 // ScopeLogs returns an iterator over ScopeLogs in this ResourceLogs.
 // Field 2 in the ResourceLogs protobuf message.
 // The returned function should be called after iteration to check for errors.
+// ScopeLogs is a thin adapter over ScopeLogsSeq.
 func (r ResourceLogs) ScopeLogs() (iter.Seq[ScopeLogs], func() error) {
-	return repeatedFieldSeq[ScopeLogs]([]byte(r), 2)
+	var iterErr error
+	seq := func(yield func(ScopeLogs) bool) {
+		r.ScopeLogsSeq(func(scope ScopeLogs, err error) bool {
+			if err != nil {
+				iterErr = err
+				return false
+			}
+			return yield(scope)
+		})
+	}
+	return seq, func() error { return iterErr }
+}
+
+// ScopeLogsSeq is the zero-allocation alternative to ScopeLogs. It is shaped
+// like iter.Seq2[ScopeLogs, error] and meant to be ranged over directly. On a
+// parse error it yields a nil ScopeLogs with a non-nil error and stops.
+func (r ResourceLogs) ScopeLogsSeq(yield func(ScopeLogs, error) bool) {
+	repeatedFieldSeq2([]byte(r), 2, yield)
 }
 
 // Scope returns the InstrumentationScope for this ScopeLogs. It returns
@@ -100,13 +137,7 @@ func (s ScopeLogs) LogRecords() (iter.Seq[LogRecord], func() error) {
 // directly. On a parse error it yields a nil LogRecord with a non-nil error and
 // stops.
 func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) {
-	forEachRepeatedField([]byte(s), 2, func(rb []byte, err error) bool {
-		if err != nil {
-			yield(nil, err)
-			return false
-		}
-		return yield(LogRecord(rb), nil)
-	})
+	repeatedFieldSeq2([]byte(s), 2, yield)
 }
 
 // SeverityNumber returns the LogRecord severity_number enum (field 2).

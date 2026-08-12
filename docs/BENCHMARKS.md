@@ -517,6 +517,38 @@ point in a batch, such as scrape-shaped or high-cardinality workloads.
 
 ---
 
+## Allocation-free container iteration (E-3008)
+
+`BenchmarkContainerSeq` walks every resource, scope and log record using either
+the ordinary closure/error-function adapters or the `ResourceLogsSeq` and
+`ScopeLogsSeq` method values. The two fixtures isolate different production
+shapes: record-heavy is 5 resources × 2 scopes × 100 records; resource-heavy
+is 20 resources × 1 scope × 5 records. Both arms use `LogRecordsSeq` at the
+record level, so the difference is only the two container levels.
+
+**Environment-specific result:** 11th Gen Intel Core i7-11800H, linux/amd64,
+Go 1.25.12:
+
+```bash
+go test -run 'TestContainerSeq' -bench '^BenchmarkContainerSeq$' -benchmem -count=1
+```
+
+Time varied with machine load and is not claimed here. Allocation counts are
+toolchain-specific; zero allocations on the supported toolchain is the gate.
+
+| Shape | Iterator | B/op | allocs/op |
+|---|---|---:|---:|
+| record-heavy | ordinary | 424 | 15 |
+| record-heavy | sequence | 0 | 0 |
+| resource-heavy | ordinary | 1,264 | 45 |
+| resource-heavy | sequence | 0 | 0 |
+
+The sequence form removes every container-iterator allocation in both shapes.
+The ordinary API remains available as an adapter with unchanged wire order,
+lazy error timing and early-stop behavior. Metrics and traces expose the same
+sequence forms because their resource/scope container layout and escape
+behavior are identical; `TestContainerSeq_ZeroAllocations` pins all three.
+
 ## Log severity classification (E-2892)
 
 This benchmark models an insight consumer that reads resource context through

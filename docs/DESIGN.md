@@ -89,15 +89,23 @@ the range syntax simple; the error closure captures a parse error discovered
 during lazy traversal. It must be checked after the range.
 
 This form costs two small allocations when opened because its closures escape.
-At outer levels that cost is paid once per request, resource or scope and is
-small compared with materializing a pdata object graph.
+At outer levels that cost is paid once per request, resource or scope. It is
+small compared with materializing a pdata object graph, but a container-heavy
+consumer can still make it a material share of its allocation rate.
 
 ### Hot-path form
 
-Opening an ordinary iterator once per metric or log record would multiply the
-closure cost by thousands of elements. The deepest hot paths therefore expose
-yield methods shaped like `iter.Seq2[T, error]`:
+Opening an ordinary iterator once per metric or log record multiplies the
+closure cost by thousands of elements. Container-heavy consumers also capture
+state in an outer iterator's loop body, forcing that state to the heap. Hot
+paths therefore expose yield methods shaped like `iter.Seq2[T, error]`:
 
+- `ExportMetricsServiceRequest.ResourceMetricsSeq` and
+  `ResourceMetrics.ScopeMetricsSeq`;
+- `ExportLogsServiceRequest.ResourceLogsSeq` and
+  `ResourceLogs.ScopeLogsSeq`;
+- `ExportTracesServiceRequest.ResourceSpansSeq` and
+  `ResourceSpans.ScopeSpansSeq`;
 - `Metric.DataPointsSeq`;
 - `Metric.MetadataSeq`;
 - `DataPoint.AttributesSeq`;
@@ -105,9 +113,9 @@ yield methods shaped like `iter.Seq2[T, error]`:
 - `ScopeLogs.LogRecordsSeq`.
 
 These yield errors inline and keep the per-element walk on the stack. The
-ordinary methods provide the same external traversal semantics;
-`Metric.DataPoints` and `ScopeLogs.LogRecords` are adapters over their hot
-forms.
+ordinary methods provide the same external traversal semantics and are
+adapters over their hot forms. The container variants cover all three signals
+deliberately: their protobuf shape and compiler escape behavior are identical.
 
 Both forms stop on consumer cancellation or the first parse error. Because
 iteration is lazy, an early stop intentionally leaves later bytes unvisited.

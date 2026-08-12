@@ -294,34 +294,20 @@ func ExampleLogRecord_Severity() {
 }
 
 func printLogSeverities(data []byte) error {
-	resources, resourcesErr := otlpwire.ExportLogsServiceRequest(data).ResourceLogs()
-	var failure error
-	for resourceLogs := range resources {
-		if failure = printResourceLogSeverities(resourceLogs); failure != nil {
-			break
+	for resourceLogs, err := range otlpwire.ExportLogsServiceRequest(data).ResourceLogsSeq {
+		if err != nil {
+			return err
+		}
+		for scope, err := range resourceLogs.ScopeLogsSeq {
+			if err != nil {
+				return err
+			}
+			if err := printScopeLogSeverities(scope); err != nil {
+				return err
+			}
 		}
 	}
-	// The error closure must be checked even when the loop exited early,
-	// so the split into one function per level is the point of this shape,
-	// not incidental.
-	if err := resourcesErr(); err != nil {
-		return err
-	}
-	return failure
-}
-
-func printResourceLogSeverities(resourceLogs otlpwire.ResourceLogs) error {
-	scopes, scopesErr := resourceLogs.ScopeLogs()
-	var failure error
-	for scope := range scopes {
-		if failure = printScopeLogSeverities(scope); failure != nil {
-			break
-		}
-	}
-	if err := scopesErr(); err != nil {
-		return err
-	}
-	return failure
+	return nil
 }
 
 // printScopeLogSeverities needs no closure check: LogRecordsSeq yields its

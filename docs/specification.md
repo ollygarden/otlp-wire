@@ -149,10 +149,12 @@ The error function must be checked after iteration, including after an early
 exit. Iteration is lazy: breaking early stops parsing, so corruption later in
 the unvisited input cannot be reported.
 
-Hot per-element paths additionally expose yield-based methods such as
+Hot per-element and per-container paths additionally expose yield-based
+methods: the `Resource*Seq` and `Scope*Seq` container iterators, plus
 `DataPointsSeq`, `MetadataSeq`, `AttributesSeq`, and `LogRecordsSeq`. They
 yield `(value, error)` inline, stop after the first error, and avoid the
-escaping closures of the ordinary form. Both forms preserve wire order.
+escaping closures of the ordinary form. Both forms preserve wire order; the
+ordinary container iterators are adapters over their yield-based counterparts.
 
 Changing the ordinary `(iter.Seq[T], func() error)` shape or the inline-error
 shape of the hot variants is a breaking API change.
@@ -446,9 +448,10 @@ is part of this library's purpose and compatibility surface.
 
 - Counting valid requests is zero-allocation.
 - Ordinary iterator opens have the documented small closure cost.
-- `DataPointsSeq`, `MetadataSeq`, `AttributesSeq` (on both `Resource` and
-  `InstrumentationScope`), and `LogRecordsSeq` remain zero-allocation on their
-  per-element paths.
+- `ResourceMetricsSeq`, `ScopeMetricsSeq`, `ResourceLogsSeq`, `ScopeLogsSeq`,
+  `ResourceSpansSeq`, `ScopeSpansSeq`, `DataPointsSeq`, `MetadataSeq`,
+  `AttributesSeq` (on both `Resource` and `InstrumentationScope`), and
+  `LogRecordsSeq` remain zero-allocation on their per-element paths.
 - Accessors return aliased slices rather than copying payload data, with one
   documented exception: `Resource()` and `Scope()` alias the input when a
   container holds a single occurrence of that field (the case every real
