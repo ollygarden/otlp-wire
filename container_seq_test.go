@@ -51,25 +51,15 @@ func TestContainerSeq_EarlyStopLeavesLaterCorruptionUnvisited(t *testing.T) {
 	payload := appendRepeatedMessages(nil, 1, first)
 	payload = append(payload, 0x80)
 
-	yields := 0
-	for resource, err := range ExportLogsServiceRequest(payload).ResourceLogsSeq {
-		require.NoError(t, err)
-		require.Equal(t, ResourceLogs(first), resource)
-		yields++
-		break
-	}
-	require.Equal(t, 1, yields)
+	assertSeqEarlyStop(t, ExportLogsServiceRequest(payload).ResourceLogsSeq, ResourceLogs(first))
+	assertSeqEarlyStop(t, ExportMetricsServiceRequest(payload).ResourceMetricsSeq, ResourceMetrics(first))
+	assertSeqEarlyStop(t, ExportTracesServiceRequest(payload).ResourceSpansSeq, ResourceSpans(first))
 
 	resource := appendRepeatedMessages(nil, 2, first)
 	resource = append(resource, 0x80)
-	yields = 0
-	for scope, err := range ResourceLogs(resource).ScopeLogsSeq {
-		require.NoError(t, err)
-		require.Equal(t, ScopeLogs(first), scope)
-		yields++
-		break
-	}
-	require.Equal(t, 1, yields)
+	assertSeqEarlyStop(t, ResourceLogs(resource).ScopeLogsSeq, ScopeLogs(first))
+	assertSeqEarlyStop(t, ResourceMetrics(resource).ScopeMetricsSeq, ScopeMetrics(first))
+	assertSeqEarlyStop(t, ResourceSpans(resource).ScopeSpansSeq, ScopeSpans(first))
 }
 
 func TestContainerSeq_MalformedWire(t *testing.T) {
@@ -84,13 +74,14 @@ func TestContainerSeq_MalformedWire(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			yields := 0
-			for value, err := range ExportLogsServiceRequest(tt.payload).ResourceLogsSeq {
-				require.Nil(t, value)
-				require.Error(t, err)
-				yields++
-			}
-			require.Equal(t, 1, yields)
+			assertSeqError(t, ExportLogsServiceRequest(tt.payload).ResourceLogsSeq)
+			assertSeqError(t, ExportMetricsServiceRequest(tt.payload).ResourceMetricsSeq)
+			assertSeqError(t, ExportTracesServiceRequest(tt.payload).ResourceSpansSeq)
+
+			scopePayload := remapField(tt.payload, 1, 2)
+			assertSeqError(t, ResourceLogs(scopePayload).ScopeLogsSeq)
+			assertSeqError(t, ResourceMetrics(scopePayload).ScopeMetricsSeq)
+			assertSeqError(t, ResourceSpans(scopePayload).ScopeSpansSeq)
 		})
 	}
 }
@@ -278,6 +269,41 @@ func assertSeqParity[T ~[]byte](
 	require.Equal(t, adapterErr.Error(), seqErr.Error())
 	require.Equal(t, want, ordinaryValues)
 	require.Equal(t, ordinaryValues, seqValues)
+}
+
+func assertSeqEarlyStop[T ~[]byte](t *testing.T, seq func(func(T, error) bool), want T) {
+	t.Helper()
+	yields := 0
+	for value, err := range seq {
+		require.NoError(t, err)
+		require.Equal(t, want, value)
+		yields++
+		break
+	}
+	require.Equal(t, 1, yields)
+}
+
+func assertSeqError[T ~[]byte](t *testing.T, seq func(func(T, error) bool)) {
+	t.Helper()
+	yields := 0
+	for value, err := range seq {
+		require.Nil(t, value)
+		require.Error(t, err)
+		yields++
+	}
+	require.Equal(t, 1, yields)
+}
+
+func remapField(payload []byte, from, to protowire.Number) []byte {
+	if len(payload) == 0 {
+		return nil
+	}
+	num, typ, n := protowire.ConsumeTag(payload)
+	if n < 0 || num != from {
+		return append([]byte(nil), payload...)
+	}
+	result := protowire.AppendTag(nil, to, typ)
+	return append(result, payload[n:]...)
 }
 
 func appendRepeatedMessages(dst []byte, field protowire.Number, messages ...[]byte) []byte {
