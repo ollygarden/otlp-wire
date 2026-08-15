@@ -7,8 +7,8 @@ commit, and pull-request expectations.
 
 ## Development commands
 
-Use Go 1.25 or newer to match the module directive and iterator APIs. CI uses
-the latest stable Go release.
+Use Go 1.26.6 or newer to match the module directive and iterator APIs. CI
+pins Go 1.26.6.
 
 ```bash
 go mod tidy
