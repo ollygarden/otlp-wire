@@ -454,7 +454,7 @@ For detailed benchmarks and methodology, see [BENCHMARKS.md](docs/BENCHMARKS.md)
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.26.6+
 
 ## License
 
