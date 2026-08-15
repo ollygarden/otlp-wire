@@ -10,7 +10,7 @@ guardrails, testing patterns, and change-specific validation matrix.
 
 ## Set up and validate
 
-Use Go 1.26.6 or newer. CI uses the latest stable Go release.
+Use Go 1.26.6 or newer. CI pins Go 1.26.6.
 
 ```bash
 go test -v -race ./...
