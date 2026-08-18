@@ -237,26 +237,23 @@ machine; this machine's absolute numbers differ from the Apple M4 figures
 recorded for this benchmark above since they are different hardware, but the
 before/after comparison on identical hardware is what matters here).
 
-## Scope, schema_url and Metric.Name (E-2942)
+## Scope and schema_url (E-2942)
 
 E-2942 added `Scope()` to `ScopeMetrics`, `ScopeLogs` and `ScopeSpans`,
 `SchemaUrl()` to all six containers, and the `InstrumentationScope`
-accessors. It also changed `Metric.Name()` from
-first-match to protobuf singular-scalar (last-value-wins) resolution. Both
-new resolutions must scan the whole enclosing message, so these benchmarks
-quantify that scan and confirm the zero-allocation gates still hold.
+accessors. Both new resolutions must scan the whole enclosing message, so
+these benchmarks quantify that scan and confirm the zero-allocation gates
+still hold. (`Metric.Name` was moved to last-value-wins here too and moved
+back in E-2985; its current figures are in "Metric.Name resolution" below.)
 
 **Environment:** 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz, linux/amd64,
-Go 1.25.12. `Metric.Name` was compared against the identical benchmark with
-only the accessor body reverted to `extractBytesField`, so the two sides run
-the same fixture and harness on the same machine in the same session.
+Go 1.25.12.
 
 **Commands:**
 
 ```bash
 go test -run '^$' -bench 'BenchmarkScope_(SingleOccurrence|MultipleOccurrences|NameVersion_WireFormat|NameVersion_Unmarshal)$' -benchmem -count=10 ./...
 go test -run '^$' -bench 'ScanScaling' -benchmem -count=5 ./...
-go test -run '^$' -bench 'BenchmarkMetric_Name$' -benchmem -count=6 ./...
 ```
 
 ### Scope access versus full decode
@@ -319,38 +316,6 @@ Findings:
 - Each skipped field is still cheap: `protowire.ConsumeFieldValue` reads the
   length prefix and steps over the body without descending. Growth is in the
   number of tags, not their size.
-
-### `Metric.Name` — first-match to last-value-wins
-
-**Fixture:** the E-2608 scrape shape (one resource, one scope, 4800 metrics
-with one datapoint each), iterating every metric and reading its name. The two
-revisions differ only in `Metric.Name`'s body; everything else, including the
-capacity clamp in `forEachRepeatedField`, is identical. Measured by
-alternating the two builds (two rounds, `-count=6` each) rather than running
-one after the other, because a single sequential pair on this machine drifts
-enough to understate the gap.
-
-| Revision | ns/op (round 1, round 2) | B/op | allocs/op |
-|---|---:|---:|---:|
-| first-match (previous) | 116,093 / 115,150 | 112 | 6 |
-| last-value-wins (this change) | 129,147 / 130,234 | 112 | 6 |
-
-About **12% slower** across 4800 metrics — roughly 2.9 ns more per metric —
-with allocations unchanged. The observed ranges do not overlap, so the gap is
-real rather than noise.
-
-The cost is bounded and does not scale with payload size: a `Metric`'s
-top-level fields are its name, description, unit, one oneof body and optional
-metadata, and `protowire.ConsumeFieldValue` on the length-delimited body reads
-its length prefix and steps over it without descending into the datapoints.
-What the scan buys is pdata parity on a repeated `name`; what it costs is the
-early return. A consumer reading names across millions of metrics per scrape
-should weigh that 12% deliberately — it is the largest single regression in
-this change. The correctness reason is in [DESIGN.md](DESIGN.md).
-
-An earlier revision of this section reported ~3% from a non-interleaved
-measurement taken while the machine was under other load. The figures above
-supersede it.
 
 ### Gates unchanged
 
@@ -827,3 +792,95 @@ actually takes.
 
 Drop the hand-rolled arm and this subsection once overstory moves to the Span
 accessors.
+
+## Metric.Name resolution (E-2985)
+
+E-2985 moved `Metric.Name` back to first-match (`extractBytesField`) from the
+last-value-wins scan E-2942 gave it. The accessor is called once per metric, so
+the cost scales with metric count; marigold reads it across ~4,800-metric
+scrape payloads.
+
+**The measurement only works on a fixture built by hand.** pdata's
+`ProtoMarshaler` writes fields back-to-front — a marshalled `Metric` here comes
+out as `[5 1]`, body then `name` — so `name` lands *last* and a first-match
+scan has to walk the whole metric to reach it anyway. Against that fixture the
+two resolutions are nearly indistinguishable, which is why
+`BenchmarkMetric_Name` did not catch the regression it was added to guard.
+Stock protobuf runtimes, and therefore the OTLP SDK exporters, emit ascending
+field numbers with `name` first. `createScrapeShapedMetricsSDKOrder` builds
+that order with `protowire` because pdata cannot produce it. Both arms are
+kept: the pdata one reflects collector-relayed traffic, the SDK one reflects
+direct exporters.
+
+**Environment:** Apple M5, darwin/arm64, Go 1.26.6.
+
+**Method:** two prebuilt binaries differing only in `Metric.Name`'s body,
+alternated for 6 rounds rather than run as consecutive blocks. Medians of 6.
+
+```bash
+go test -c -o after.test .
+# revert Metric.Name to extractLastBytesField
+go test -c -o before.test .
+for round in 1 2 3 4 5 6; do
+  for arm in before after; do
+    ./$arm.test -test.run '^$' -test.bench 'BenchmarkMetric_Name' -test.benchmem
+  done
+done
+```
+
+### The accessor alone
+
+One metric carrying what a Prometheus receiver sets: name, unit, a datapoint
+body and three metadata entries. The two arms are the same 168 bytes in
+different field order.
+
+| Field order | last-value-wins | first-match (current) | change |
+|---|---:|---:|---:|
+| ascending (SDK exporters, `name` first) | 26.9 ns | 4.2 ns | **−84%** |
+| back-to-front (pdata, `name` last) | 25.9 ns | 25.7 ns | none |
+
+Both remain 0 B/op, 0 allocs/op. The second row is the point: where `name` is
+emitted last, first-match buys nothing, because proving it is the first
+occurrence and reaching the last one are the same walk.
+
+### Clamping the first-match view
+
+Moving `Metric.Name` onto `extractBytesField` exposed that the helper returned
+`protowire.ConsumeBytes`'s slice unclamped, so a caller appending to the
+returned name could overwrite the fields behind it. The helper now clamps, the
+way `forEachRepeatedField` and `extractMergedMessage` already did. That also
+clamps `KeyValue.Key` and `KeyValue.ValueRaw`, the library's hottest path, so
+it was measured: paired binaries differing only in the slice expression,
+4 alternating rounds.
+
+`BenchmarkMetrics_DeepIteration_WireFormat` medians 36.0 µs unclamped against
+37.1 µs clamped, and `BenchmarkMetrics_ScrapeDeepIteration_WireFormat` 701.8 µs
+against 713.1 µs. Both pairs of ranges overlap (35.4–36.4 against 35.9–38.4;
+686.9–709.4 against 695.9–735.7), so the difference is not separable from noise
+at this sample size. Allocations are byte-identical on both arms
+(20912 B/op, 1033 allocs/op and 460986 B/op, 19207 allocs/op), which is the
+guardrail that matters here.
+
+### Across a scrape payload
+
+The E-2608 scrape shape — one resource, one scope, 4800 metrics with one
+datapoint each — iterated in full, reading every name.
+
+| Fixture | last-value-wins | first-match (current) | change |
+|---|---:|---:|---:|
+| `BenchmarkMetric_Name` (pdata order) | 69.4 µs | 63.0 µs | −9% |
+| `BenchmarkMetric_Name_SDKOrder` | 70.8 µs | 41.7 µs | **−41%** |
+
+Both stay at 112 B/op, 6 allocs/op — the allocations are the iterators being
+opened, not the accessor.
+
+Read the two rows differently. The SDK-order ranges are far apart
+(67.8–72.2 µs against 40.2–45.9 µs) and the gap is the early return. The
+pdata-order ranges **overlap** (67.2–71.0 µs against 61.2–67.3 µs), so treat
+that −9% as suggestive rather than established: on that fixture both
+resolutions traverse identical bytes, and the accessor-level arm above shows no
+change at all. Any real residual there is `extractLastBytesField` reaching its
+occurrence through a `forEachRepeatedField` closure where `extractBytesField`
+runs a flat loop — a per-call cost the remaining last-value-wins accessors
+still pay. Isolating it needs its own paired benchmark, which this change does
+not add.

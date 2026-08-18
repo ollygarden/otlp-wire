@@ -1488,10 +1488,14 @@ func TestMetricName_Absent(t *testing.T) {
 	require.Nil(t, name)
 }
 
-// TestMetricName_LastValueWins covers the E-2942 change from first-match to
-// protobuf singular-scalar semantics. pdata assigns on each occurrence, so the
-// last one wins; the previous first-match behavior diverged.
-func TestMetricName_LastValueWins(t *testing.T) {
+// TestMetricName_FirstMatchDivergesFromPdata pins the E-2985 divergence.
+// pdata assigns on each occurrence, so a repeated name resolves to the last
+// one there; Name scans first-match and returns the first. The divergence is
+// deliberate -- reaching the last occurrence means walking every metric to its
+// end, which a conformant producer never makes necessary. See the "Singular
+// scalars" section of docs/DESIGN.md and the deviation table in
+// operations.md.
+func TestMetricName_FirstMatchDivergesFromPdata(t *testing.T) {
 	var m Metric
 	m = protowire.AppendTag(m, 1, protowire.BytesType)
 	m = protowire.AppendString(m, "first")
@@ -1502,25 +1506,20 @@ func TestMetricName_LastValueWins(t *testing.T) {
 
 	name, err := m.Name()
 	require.NoError(t, err)
-	require.Equal(t, "second", string(name))
+	require.Equal(t, "first", string(name), "otlp-wire returns the first occurrence")
 
-	// pdata is the oracle: wrap the metric into a full request and compare.
-	sm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	sm = protowire.AppendVarint(sm, uint64(len(m)))
-	sm = append(sm, m...)
-	rm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	rm = protowire.AppendVarint(rm, uint64(len(sm)))
-	rm = append(rm, sm...)
-
+	// pdata is the oracle for what we are diverging from: wrap the metric into
+	// a full request and show it resolves the other way.
 	req := pmetricotlp.NewExportRequest()
-	require.NoError(t, req.UnmarshalProto(wrapAsRequest(rm)))
+	require.NoError(t, req.UnmarshalProto(metricsPayloadWithMetric(m)))
 	require.Equal(t, "second",
-		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name())
+		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name(),
+		"pdata resolves the same bytes to the last occurrence")
 }
 
-// TestMetricName_UnclosedGroupIsStricterThanPdata pins the one direction in
-// which the widened scan disagrees with pdata. protowire's field skip requires
-// a start-group to have its matching end-group; pdata's unknown-field skip
+// TestSchemaUrl_UnclosedGroupIsStricterThanPdata pins the one direction in
+// which a full scan disagrees with pdata. protowire's field skip requires a
+// start-group to have its matching end-group; pdata's unknown-field skip
 // returns as soon as it consumes a non-group wire type, even inside an
 // unclosed group. So this payload is an error here and accepted there.
 //
@@ -1528,43 +1527,153 @@ func TestMetricName_LastValueWins(t *testing.T) {
 // "Instrumentation scope and schema URL" section of docs/specification.md).
 // Groups are proto2-only and OTLP never emits them. This test exists so the
 // behavior cannot change silently.
-func TestMetricName_UnclosedGroupIsStricterThanPdata(t *testing.T) {
-	var m Metric
-	m = protowire.AppendTag(m, 1, protowire.BytesType)
-	m = protowire.AppendString(m, "requests")
+//
+// It covers ScopeMetrics.SchemaUrl rather than Metric.Name: since E-2985 Name
+// scans first-match and stops before any trailing corruption, so the accessors
+// that still walk to the end of the message are the ones that carry this
+// behavior.
+func TestSchemaUrl_UnclosedGroupIsStricterThanPdata(t *testing.T) {
+	var sm ScopeMetrics
+	sm = protowire.AppendTag(sm, 3, protowire.BytesType)
+	sm = protowire.AppendString(sm, "https://example.com/schema")
 	// Unknown field 8 as a start-group holding a fixed32, with no end-group.
-	m = protowire.AppendTag(m, 8, protowire.StartGroupType)
-	m = protowire.AppendTag(m, 6, protowire.Fixed32Type)
-	m = protowire.AppendFixed32(m, 0)
-
-	sm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	sm = protowire.AppendVarint(sm, uint64(len(m)))
-	sm = append(sm, m...)
-	rm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	rm = protowire.AppendVarint(rm, uint64(len(sm)))
-	rm = append(rm, sm...)
+	sm = protowire.AppendTag(sm, 8, protowire.StartGroupType)
+	sm = protowire.AppendTag(sm, 6, protowire.Fixed32Type)
+	sm = protowire.AppendFixed32(sm, 0)
 
 	req := pmetricotlp.NewExportRequest()
-	require.NoError(t, req.UnmarshalProto(wrapAsRequest(rm)),
+	require.NoError(t, req.UnmarshalProto(wrapAsRequest(resourceContainerWithScope(sm))),
 		"pdata tolerates the unclosed group")
-	require.Equal(t, "requests",
-		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name())
+	require.Equal(t, "https://example.com/schema",
+		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).SchemaUrl())
 
-	_, err := m.Name()
+	_, err := sm.SchemaUrl()
 	require.Error(t, err, "otlp-wire rejects it: group validation is strict")
 }
 
-// TestMetricName_MalformedTrailingField pins the validation-scope consequence
-// of the full scan: corruption after the last name occurrence is now reported.
-func TestMetricName_MalformedTrailingField(t *testing.T) {
+// TestMetricName_MalformedTrailingFieldNotReported pins the validation-scope
+// consequence of first-match: Name returns at field 1 and never reaches the
+// corruption behind it, so these bytes are valid here and rejected by pdata,
+// which decodes the whole message. This is the narrower validity claim
+// E-2985 accepted in exchange for the early return; accessors that still walk
+// the message keep reporting trailing corruption, as
+// TestResource_MalformedTrailingFieldAfterResource covers.
+func TestMetricName_MalformedTrailingFieldNotReported(t *testing.T) {
 	var m Metric
 	m = protowire.AppendTag(m, 1, protowire.BytesType)
 	m = protowire.AppendString(m, "requests")
 	m = protowire.AppendTag(m, 3, protowire.BytesType)
 	m = protowire.AppendVarint(m, 64) // declares more than it carries
 
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, "requests", string(name))
+
+	req := pmetricotlp.NewExportRequest()
+	require.Error(t, req.UnmarshalProto(metricsPayloadWithMetric(m)),
+		"pdata decodes the whole metric and rejects the truncated unit")
+}
+
+// TestMetricName_ViewAndAllocationContract pins the aliasing contract every
+// view accessor in this package shares: the result aliases the caller's buffer
+// with a clamped capacity, so a caller appending to it reallocates instead of
+// overwriting the fields that follow.
+func TestMetricName_ViewAndAllocationContract(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "requests")
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendString(m, "ms")
+	original := string(m)
+
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, len(name), cap(name), "capacity must be clamped so a caller's append reallocates")
+
+	_ = append(name, ':', 'k')
+	require.Equal(t, original, string(m), "appending to the view must not reach the unit field")
+
+	// A copy would keep the old byte.
+	index := bytes.Index(m, []byte("requests"))
+	require.GreaterOrEqual(t, index, 0)
+	m[index] = 'R'
+	require.Equal(t, []byte("Requests"), name)
+}
+
+// TestMetricName_LeadingUnclosedGroupRejected pins the direction in which
+// first-match resolution is still stricter than pdata. A group before the
+// name field is skipped on the way to it, and this package's skip requires a
+// matching end-group where pdata's does not. A group *after* name is never
+// reached -- TestMetricName_MalformedTrailingFieldNotReported covers that.
+func TestMetricName_LeadingUnclosedGroupRejected(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 8, protowire.StartGroupType)
+	m = protowire.AppendTag(m, 6, protowire.Fixed32Type)
+	m = protowire.AppendFixed32(m, 0)
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "requests")
+
 	_, err := m.Name()
-	require.Error(t, err)
+	require.Error(t, err, "otlp-wire rejects it: group validation is strict")
+
+	req := pmetricotlp.NewExportRequest()
+	require.NoError(t, req.UnmarshalProto(metricsPayloadWithMetric(m)),
+		"pdata tolerates the unclosed group")
+}
+
+// TestMetricName_MalformedFirstOccurrence covers the error branches first-match
+// resolution still reaches. Corruption at or before the name field is reported;
+// only corruption behind it is not.
+func TestMetricName_MalformedFirstOccurrence(t *testing.T) {
+	t.Run("wrong wire type", func(t *testing.T) {
+		var m Metric
+		m = protowire.AppendTag(m, 1, protowire.VarintType)
+		m = protowire.AppendVarint(m, 7)
+
+		_, err := m.Name()
+		require.Error(t, err)
+	})
+
+	t.Run("truncated length prefix", func(t *testing.T) {
+		var m Metric
+		m = protowire.AppendTag(m, 1, protowire.BytesType)
+		m = protowire.AppendVarint(m, 64) // declares more than it carries
+		m = append(m, "requests"...)
+
+		_, err := m.Name()
+		require.Error(t, err)
+	})
+
+	t.Run("malformed field before name", func(t *testing.T) {
+		var m Metric
+		m = protowire.AppendTag(m, 3, protowire.BytesType)
+		m = protowire.AppendVarint(m, 64) // declares more than it carries
+		m = protowire.AppendTag(m, 1, protowire.BytesType)
+		m = protowire.AppendString(m, "requests")
+
+		_, err := m.Name()
+		require.Error(t, err)
+	})
+}
+
+// TestMetricName_LaterOccurrenceWrongWireTypeAccepted pins the widened
+// acceptance first-match brings: a second name occurrence is never examined,
+// so its wire type is never validated. pdata decodes the whole metric and
+// rejects it.
+func TestMetricName_LaterOccurrenceWrongWireTypeAccepted(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "first")
+	m = protowire.AppendTag(m, 1, protowire.VarintType)
+	m = protowire.AppendVarint(m, 7)
+
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, "first", string(name))
+
+	req := pmetricotlp.NewExportRequest()
+	require.Error(t, req.UnmarshalProto(metricsPayloadWithMetric(m)),
+		"pdata rejects the wrong wire type on the second occurrence")
 }
 
 // buildAllTypesMetrics builds one metric of each of the five types, each

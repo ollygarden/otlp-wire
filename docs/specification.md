@@ -308,7 +308,7 @@ field 1; the accessors absorb the difference, but anyone writing new wire code
 against this hierarchy must not assume they match.
 
 **Singular scalars resolve to the last occurrence (E-2942).** `SchemaUrl`,
-`InstrumentationScope.Name`, `InstrumentationScope.Version`, and `Metric.Name`
+`InstrumentationScope.Name` and `InstrumentationScope.Version`
 return the *last* occurrence when a field is repeated, which is what protobuf
 and pdata do. The distinction from the merge rule for singular messages is a
 behavioral contract, not an implementation detail: a consumer relying on
@@ -319,6 +319,17 @@ Two consequences follow, both mirroring the `Resource()` change: these
 accessors scan the whole enclosing message, so a malformed field located
 *after* the last occurrence is reported as an error; and cost grows with the
 enclosing message's field count while staying allocation-free.
+
+**`Metric.Name` resolves first-match instead (E-2985).** It returns the
+*first* `name` occurrence where pdata takes the last, and stops at that field
+rather than scanning the rest of the metric. Neither consequence above applies
+to it: corruption located after `name` is accepted, and cost does not grow
+with the metric's field count. This is a deliberate divergence bought for the
+early return — a full walk costs every conformant payload to change an answer
+only malformed payloads can produce — and it is the same trade the `Span`
+identifier accessors take. `KeyValue.Key` and `KeyValue.ValueRaw` are
+first-match for the same class of reason. [DESIGN.md](DESIGN.md) records the
+measurement.
 
 **Where the widened scan is stricter than pdata.** Skipping a field applies
 this library's group validation, which requires a start-group wire type to
@@ -331,19 +342,25 @@ fallback disagree, it is the safe direction, and it is deliberate: `AGENTS.md`
 requires that corruption never be silently accepted to keep a walk moving.
 Groups are a proto2 construct that OTLP never emits, so the shapes affected
 are malformed or adversarial rather than anything a conformant producer
-emits. `Metric.Name` is newly subject to this because it now scans; before
-E-2942 it returned at the first `name` field and never reached such a field.
-`TestMetricName_UnclosedGroupIsStricterThanPdata` pins the divergence so it
-stays a decision rather than an accident.
+emits. `Metric.Name` is subject to this only when the group *precedes* the
+`name` field: it returns at the first `name`, so a group after that field is
+never reached, while one before it is skipped and rejected.
+`TestSchemaUrl_UnclosedGroupIsStricterThanPdata` and
+`TestMetricName_LeadingUnclosedGroupRejected` pin the divergence so it stays a
+decision rather than an accident.
 
-**`Metric.Name` behavior change (unreleased, E-2942, v0.1.0).** It previously
-returned the first occurrence. That diverged from pdata in exactly the way
-`Resource()` did before E-2941, so it was corrected rather than left
-inconsistent with the accessors added beside it. The signature is unchanged
-and no consumer surveyed depends on the old resolution; a producer emitting a
-repeated `Metric.name` was already outside what its pdata fallback would agree
-with. `KeyValue.Key` and `ValueRaw` keep first-match semantics deliberately,
-as documented above — they are hashing-oriented views, not parity accessors.
+**`Metric.Name` behavior change (unreleased, E-2985).** It resolves
+first-match. E-2942 (v0.2.0) moved it to last-value-wins for consistency with
+the scalar accessors added beside it; E-2985 priced that consistency — a walk
+to the end of every metric, 84% of the accessor's time on SDK-ordered
+bytes — and moved it back. Consumers upgrading across this see a changed
+answer on a repeated `Metric.name`, and a changed *verdict* on corruption
+located anywhere after the `name` field — including inside the datapoint body,
+which the enclosing iterators do not descend into, so such a payload now
+traverses without an error from any accessor. Both require malformed or
+unusual input; neither is reachable from a conformant producer. The signature is unchanged. `KeyValue.Key` and
+`ValueRaw` keep first-match semantics deliberately, as documented above — they
+are hashing-oriented views, not parity accessors.
 
 ### Metrics depth
 

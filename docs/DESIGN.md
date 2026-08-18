@@ -65,7 +65,7 @@ Parsing composes a small set of helpers around
 - repeated-field counting;
 - repeated-field iteration;
 - length-delimited and scalar extraction, in first-match and last-value-wins
-  forms;
+  forms, chosen per accessor rather than per field kind;
 - merged singular-message extraction and resource re-wrapping;
 - field skipping with matching-group validation;
 - bounded semantic parsing for KeyValue, AnyValue, Resource, LogRecord and
@@ -321,15 +321,31 @@ scope in E-2942:
 
 ### Singular scalars: last occurrence wins
 
-`SchemaUrl`, `InstrumentationScope.Name`, `InstrumentationScope.Version` and
-`Metric.Name` share `extractLastBytesField`. Because a later occurrence
-replaces an earlier one, the extractor cannot stop at the first match; it
-records the most recent occurrence and returns after the walk completes.
+`SchemaUrl`, `InstrumentationScope.Name` and `InstrumentationScope.Version`
+share `extractLastBytesField`. Because a later occurrence replaces an earlier
+one, the extractor cannot stop at the first match; it records the most recent
+occurrence and returns after the walk completes.
 
-`Metric.Name` returned the first occurrence before E-2942. That was a
-divergence from pdata of the same kind E-2941 fixed for `Resource()`, so it
-was corrected here rather than left to differ from the new accessors beside
-it.
+**`Metric.Name` is the priced exception.** It resolves first-match via
+`extractBytesField`, returning the first `name` occurrence where pdata takes
+the last. This is the `Span` identifier trade applied to metrics: reaching the
+last occurrence means walking every metric to its end, and the only thing that
+buys is different behavior on malformed input, since a conformant producer
+emits `name` once. The cost is not small and it is producer-shaped. Against
+one Prometheus-shaped metric, first-match measures 4.2 ns where the full walk
+measures 26.9 ns — but only when `name` is emitted first, as the OTLP SDK
+exporters emit it. On pdata-marshalled bytes, where `name` lands last, the two
+resolutions traverse the same fields and the gap nearly vanishes. That is why
+the benchmark that guarded this accessor could not see the regression it was
+meant to guard: it was built from a pdata fixture.
+[BENCHMARKS.md](BENCHMARKS.md) has both arms.
+
+The consequence accepted with it is a narrower validity claim than pdata's:
+`Name` returns before any corruption that follows the `name` field, so it
+accepts metrics pdata rejects. `Metric` therefore carries two parser classes
+the way `Span` does — `Metadata` and `DataPoints` still walk what they read.
+`TestMetricName_FirstMatchDivergesFromPdata` and
+`TestMetricName_MalformedTrailingFieldNotReported` pin both directions.
 
 `KeyValue.Key` and `KeyValue.ValueRaw` keep first-match semantics via
 `extractBytesField`, and this is a known divergence rather than an
