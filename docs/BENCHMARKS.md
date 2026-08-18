@@ -843,6 +843,24 @@ Both remain 0 B/op, 0 allocs/op. The second row is the point: where `name` is
 emitted last, first-match buys nothing, because proving it is the first
 occurrence and reaching the last one are the same walk.
 
+### Clamping the first-match view
+
+Moving `Metric.Name` onto `extractBytesField` exposed that the helper returned
+`protowire.ConsumeBytes`'s slice unclamped, so a caller appending to the
+returned name could overwrite the fields behind it. The helper now clamps, the
+way `forEachRepeatedField` and `extractMergedMessage` already did. That also
+clamps `KeyValue.Key` and `KeyValue.ValueRaw`, the library's hottest path, so
+it was measured: paired binaries differing only in the slice expression,
+4 alternating rounds.
+
+`BenchmarkMetrics_DeepIteration_WireFormat` medians 36.0 µs unclamped against
+37.1 µs clamped, and `BenchmarkMetrics_ScrapeDeepIteration_WireFormat` 701.8 µs
+against 713.1 µs. Both pairs of ranges overlap (35.4–36.4 against 35.9–38.4;
+686.9–709.4 against 695.9–735.7), so the difference is not separable from noise
+at this sample size. Allocations are byte-identical on both arms
+(20912 B/op, 1033 allocs/op and 460986 B/op, 19207 allocs/op), which is the
+guardrail that matters here.
+
 ### Across a scrape payload
 
 The E-2608 scrape shape — one resource, one scope, 4800 metrics with one

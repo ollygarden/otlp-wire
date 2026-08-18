@@ -342,18 +342,23 @@ fallback disagree, it is the safe direction, and it is deliberate: `AGENTS.md`
 requires that corruption never be silently accepted to keep a walk moving.
 Groups are a proto2 construct that OTLP never emits, so the shapes affected
 are malformed or adversarial rather than anything a conformant producer
-emits. `Metric.Name` is not subject to this: it returns at the first `name`
-field and never reaches a trailing unknown field.
-`TestMetricName_UnclosedGroupIsStricterThanPdata` pins the divergence so it
-stays a decision rather than an accident.
+emits. `Metric.Name` is subject to this only when the group *precedes* the
+`name` field: it returns at the first `name`, so a group after that field is
+never reached, while one before it is skipped and rejected.
+`TestSchemaUrl_UnclosedGroupIsStricterThanPdata` and
+`TestMetricName_LeadingUnclosedGroupRejected` pin the divergence so it stays a
+decision rather than an accident.
 
 **`Metric.Name` behavior change (unreleased, E-2985).** It resolves
 first-match. E-2942 (v0.2.0) moved it to last-value-wins for consistency with
 the scalar accessors added beside it; E-2985 priced that consistency — a walk
 to the end of every metric, 84% of the accessor's time on SDK-ordered
 bytes — and moved it back. Consumers upgrading across this see a changed
-answer only on a repeated `Metric.name`, and only if they upgraded through
-v0.2.x in the first place. The signature is unchanged. `KeyValue.Key` and
+answer on a repeated `Metric.name`, and a changed *verdict* on corruption
+located anywhere after the `name` field — including inside the datapoint body,
+which the enclosing iterators do not descend into, so such a payload now
+traverses without an error from any accessor. Both require malformed or
+unusual input; neither is reachable from a conformant producer. The signature is unchanged. `KeyValue.Key` and
 `ValueRaw` keep first-match semantics deliberately, as documented above — they
 are hashing-oriented views, not parity accessors.
 

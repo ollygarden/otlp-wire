@@ -38,7 +38,7 @@ published one means a consumer version pin.
 | `Resource()` returns `(nil, nil)` for an absent Resource instead of an error | E-2941 | Any consumer treating that error as a signal; not firing in production as of 2026-08-07 |
 | `Resource()` merges repeated occurrences instead of returning the first | E-2941 | Consumers reading resource attributes from multi-occurrence payloads |
 | `Resource()`, `Scope()` and the last-value-wins scalar accessors report corruption located after the last relevant occurrence | E-2941, E-2942 | Consumers that previously parsed such payloads without error |
-| `Metric.Name()` returns the first occurrence of a repeated `name`, where pdata takes the last, and accepts corruption located after the `name` field | E-2985 | Consumers pairing the wire path with a pdata fallback; only reachable on a repeated or malformed `Metric.name` |
+| `Metric.Name()` returns the first occurrence of a repeated `name`, where pdata takes the last, and accepts corruption located anywhere after the `name` field | E-2985 | Consumers pairing the wire path with a pdata fallback. The corruption case is **not** limited to the `name` field: a metric whose datapoint body is truncated now traverses without an error from any accessor, because the enclosing iterators check framing only |
 | Scanning accessors reject an unclosed group in an unknown trailing field, which pdata accepts | E-2942 | Consumers pairing the wire path with a pdata fallback; only reachable on malformed or adversarial input, never on conformant OTLP |
 
 The canary decision and its measured pre/post comparison are recorded at
@@ -176,7 +176,9 @@ only on malformed or adversarial input, never on conformant OTLP.
 | Input | Wire path | pdata |
 | --- | --- | --- |
 | Repeated `Metric.name` | reports the **first** occurrence | reports the last |
-| Corruption located after the `name` field | `Name` accepts | rejects |
+| Corruption anywhere after the `name` field, including inside the datapoint body | `Name` accepts | rejects |
+| Later `name` occurrence carrying a wrong wire type | `Name` accepts, returning the first | rejects |
+| Unclosed group in an unknown field *before* `name` | `Name` rejects | accepts |
 
 ### The deprecated scope containers (field 1000)
 

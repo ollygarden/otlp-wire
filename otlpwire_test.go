@@ -1574,6 +1574,108 @@ func TestMetricName_MalformedTrailingFieldNotReported(t *testing.T) {
 		"pdata decodes the whole metric and rejects the truncated unit")
 }
 
+// TestMetricName_ViewAndAllocationContract pins the aliasing contract every
+// view accessor in this package shares: the result aliases the caller's buffer
+// with a clamped capacity, so a caller appending to it reallocates instead of
+// overwriting the fields that follow.
+func TestMetricName_ViewAndAllocationContract(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "requests")
+	m = protowire.AppendTag(m, 3, protowire.BytesType)
+	m = protowire.AppendString(m, "ms")
+	original := string(m)
+
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, len(name), cap(name), "capacity must be clamped so a caller's append reallocates")
+
+	_ = append(name, ':', 'k')
+	require.Equal(t, original, string(m), "appending to the view must not reach the unit field")
+
+	// A copy would keep the old byte.
+	index := bytes.Index(m, []byte("requests"))
+	require.GreaterOrEqual(t, index, 0)
+	m[index] = 'R'
+	require.Equal(t, []byte("Requests"), name)
+}
+
+// TestMetricName_LeadingUnclosedGroupRejected pins the direction in which
+// first-match resolution is still stricter than pdata. A group before the
+// name field is skipped on the way to it, and this package's skip requires a
+// matching end-group where pdata's does not. A group *after* name is never
+// reached -- TestMetricName_MalformedTrailingFieldNotReported covers that.
+func TestMetricName_LeadingUnclosedGroupRejected(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 8, protowire.StartGroupType)
+	m = protowire.AppendTag(m, 6, protowire.Fixed32Type)
+	m = protowire.AppendFixed32(m, 0)
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "requests")
+
+	_, err := m.Name()
+	require.Error(t, err, "otlp-wire rejects it: group validation is strict")
+
+	req := pmetricotlp.NewExportRequest()
+	require.NoError(t, req.UnmarshalProto(metricsPayloadWithMetric(m)),
+		"pdata tolerates the unclosed group")
+}
+
+// TestMetricName_MalformedFirstOccurrence covers the error branches first-match
+// resolution still reaches. Corruption at or before the name field is reported;
+// only corruption behind it is not.
+func TestMetricName_MalformedFirstOccurrence(t *testing.T) {
+	t.Run("wrong wire type", func(t *testing.T) {
+		var m Metric
+		m = protowire.AppendTag(m, 1, protowire.VarintType)
+		m = protowire.AppendVarint(m, 7)
+
+		_, err := m.Name()
+		require.Error(t, err)
+	})
+
+	t.Run("truncated length prefix", func(t *testing.T) {
+		var m Metric
+		m = protowire.AppendTag(m, 1, protowire.BytesType)
+		m = protowire.AppendVarint(m, 64) // declares more than it carries
+		m = append(m, "requests"...)
+
+		_, err := m.Name()
+		require.Error(t, err)
+	})
+
+	t.Run("malformed field before name", func(t *testing.T) {
+		var m Metric
+		m = protowire.AppendTag(m, 3, protowire.BytesType)
+		m = protowire.AppendVarint(m, 64) // declares more than it carries
+		m = protowire.AppendTag(m, 1, protowire.BytesType)
+		m = protowire.AppendString(m, "requests")
+
+		_, err := m.Name()
+		require.Error(t, err)
+	})
+}
+
+// TestMetricName_LaterOccurrenceWrongWireTypeAccepted pins the widened
+// acceptance first-match brings: a second name occurrence is never examined,
+// so its wire type is never validated. pdata decodes the whole metric and
+// rejects it.
+func TestMetricName_LaterOccurrenceWrongWireTypeAccepted(t *testing.T) {
+	var m Metric
+	m = protowire.AppendTag(m, 1, protowire.BytesType)
+	m = protowire.AppendString(m, "first")
+	m = protowire.AppendTag(m, 1, protowire.VarintType)
+	m = protowire.AppendVarint(m, 7)
+
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, "first", string(name))
+
+	req := pmetricotlp.NewExportRequest()
+	require.Error(t, req.UnmarshalProto(metricsPayloadWithMetric(m)),
+		"pdata rejects the wrong wire type on the second occurrence")
+}
+
 // buildAllTypesMetrics builds one metric of each of the five types, each
 // with two datapoints carrying attributes {"method":"GET","status":"200"}
 // and timestamp 1000000000.

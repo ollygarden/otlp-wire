@@ -274,7 +274,9 @@ func extractMergedMessage(data []byte, fieldNum protowire.Number) ([]byte, error
 
 // extractBytesField extracts the first occurrence of a length-delimited
 // field from protobuf data. Returns nil (not an error) if absent.
-// The returned slice aliases data; no copy is made.
+// The returned slice aliases data with its capacity clamped to its length;
+// no copy is made. It stops at the first match, so corruption located after
+// that occurrence is not reported.
 func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 	pos := 0
 
@@ -293,7 +295,10 @@ func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 			if n < 0 {
 				return nil, errors.New("invalid bytes in field")
 			}
-			return msgBytes, nil
+			// ConsumeBytes hands back a slice whose capacity runs to the end
+			// of the enclosing buffer. Clamp it so a caller appending to the
+			// returned view cannot overwrite the fields that follow.
+			return msgBytes[:len(msgBytes):len(msgBytes)], nil
 		}
 
 		n := skipField(data[pos:], num, wireType)
