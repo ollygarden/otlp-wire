@@ -165,10 +165,17 @@ func (s ScopeMetrics) Metrics() (iter.Seq[Metric], func() error) {
 }
 
 // Name returns the metric name (field 1) as a view into the underlying
-// buffer. Returns nil if the field is not present. Repeated occurrences
-// resolve to the last one; see extractLastBytesField.
+// buffer. Returns nil if the field is not present.
+//
+// Name scans first-match and stops at the field. A repeated name therefore
+// resolves to the first occurrence where pdata takes the last, and corruption
+// after that occurrence is not reported. Both are deliberate divergences,
+// recorded in docs/DESIGN.md and operations.md: a conformant producer emits
+// name once, so the difference is observable only on malformed input, and
+// walking to the end of every metric to reach it costs every conformant
+// payload instead.
 func (m Metric) Name() ([]byte, error) {
-	return extractLastBytesField([]byte(m), 1)
+	return extractBytesField([]byte(m), 1)
 }
 
 // Metadata returns an iterator over the Metric's metadata KeyValues (field

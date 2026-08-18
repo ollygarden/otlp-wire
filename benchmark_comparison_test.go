@@ -3,6 +3,8 @@ package otlpwire
 import (
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -1244,14 +1246,88 @@ func BenchmarkSchemaUrl_ScanScaling(b *testing.B) {
 	}
 }
 
-// BenchmarkMetric_Name covers the accessor changed from first-match to
-// last-value-wins, which turned an early return into a full scan of the
-// metric's top-level fields. Compare against the same benchmark on main.
+// BenchmarkMetric_Name reads every metric name from a pdata-marshalled
+// payload. pdata's ProtoMarshaler writes fields back-to-front, so name lands
+// last in each metric and a first-match scan has to walk the whole metric
+// anyway. That makes this arm blind to the resolution change on its own --
+// BenchmarkMetric_Name_SDKOrder is the one that sees it. Keep both.
 func BenchmarkMetric_Name(b *testing.B) {
 	metrics := createScrapeShapedMetrics()
 	marshaler := &pmetric.ProtoMarshaler{}
 	payload, err := marshaler.MarshalMetrics(metrics)
 	require.NoError(b, err)
+
+	benchmarkMetricNames(b, payload)
+}
+
+// BenchmarkMetric_Name_SDKOrder reads the same names from the same shape in
+// ascending field order, where the OTLP SDK exporters put name first. This is
+// where first-match and last-value-wins actually differ: last-value-wins has
+// to walk past the datapoint body to prove no later name occurrence exists,
+// while first-match returns at the first tag.
+func BenchmarkMetric_Name_SDKOrder(b *testing.B) {
+	benchmarkMetricNames(b, createScrapeShapedMetricsSDKOrder())
+}
+
+// BenchmarkMetric_Name_Accessor isolates the accessor from the iteration
+// around it, on the metric shape a Prometheus receiver produces: name, unit,
+// a datapoint body and three metadata entries. The two arms differ only in
+// field order, so the gap between them is the cost of resolving name against
+// fields that follow it.
+func BenchmarkMetric_Name_Accessor(b *testing.B) {
+	for _, ascending := range []bool{true, false} {
+		label := "PdataOrder"
+		if ascending {
+			label = "SDKOrder"
+		}
+		metric := prometheusShapedMetric(ascending)
+		b.Run(label, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := metric.Name(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// prometheusShapedMetric builds one Metric carrying the fields a Prometheus
+// receiver sets. ascending emits fields 1, 3, 5 and 12 in wire order the way
+// the SDK exporters do; otherwise it emits them back-to-front the way pdata
+// does.
+func prometheusShapedMetric(ascending bool) Metric {
+	name := protowire.AppendString(protowire.AppendTag(nil, 1, protowire.BytesType), "process_metric_1234_total")
+	unit := protowire.AppendString(protowire.AppendTag(nil, 3, protowire.BytesType), "1")
+	body := bytesField(5, bytesField(1, numberDataPoint(42)))
+
+	var metadata []byte
+	for _, entry := range [][2]string{
+		{"prometheus.type", "counter"},
+		{"prometheus.help", "total processed items"},
+		{"otel.scope.name", "prometheus-receiver"},
+	} {
+		metadata = append(metadata, metadataEntry(stringKeyValue(entry[0], entry[1]))...)
+	}
+
+	if ascending {
+		return Metric(slices.Concat(name, unit, body, metadata))
+	}
+	return Metric(slices.Concat(metadata, body, unit, name))
+}
+
+// numberDataPoint builds a NumberDataPoint in ascending field order:
+// time_unix_nano (3), as_double (4), then any attributes (7).
+func numberDataPoint(value float64, attrs ...[]byte) []byte {
+	dp := protowire.AppendTag(nil, 3, protowire.Fixed64Type)
+	dp = protowire.AppendFixed64(dp, 1000000000)
+	dp = protowire.AppendTag(dp, 4, protowire.Fixed64Type)
+	dp = protowire.AppendFixed64(dp, math.Float64bits(value))
+	return appendRepeatedMessages(dp, 7, attrs...)
+}
+
+func benchmarkMetricNames(b *testing.B, payload []byte) {
+	b.Helper()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -1278,6 +1354,45 @@ func BenchmarkMetric_Name(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// createScrapeShapedMetricsSDKOrder builds the same scrape shape as
+// createScrapeShapedMetrics -- one resource, one scope, 4800 metrics with one
+// datapoint each -- but emits every message with ascending field numbers, the
+// way stock protobuf runtimes and therefore the OTLP SDK exporters do. It is
+// built with protowire rather than pdata precisely because pdata cannot
+// produce this order.
+func createScrapeShapedMetricsSDKOrder() []byte {
+	resource := appendRepeatedMessages(nil, 1,
+		stringKeyValue("service.name", "scraped-service"),
+		stringKeyValue("host.name", "host-1"),
+	)
+
+	scope := protowire.AppendString(protowire.AppendTag(nil, 1, protowire.BytesType), "prometheus-receiver")
+	scopeMetrics := bytesField(1, scope)
+
+	for i := 0; i < 4800; i++ {
+		points := bytesField(1, numberDataPoint(float64(i),
+			stringKeyValue("job", "node-exporter"),
+			stringKeyValue("instance", fmt.Sprintf("10.0.0.%d:9100", i%250)),
+			stringKeyValue("le", "0.5"),
+			stringKeyValue("quantile", "0.99"),
+		))
+
+		metric := protowire.AppendString(protowire.AppendTag(nil, 1, protowire.BytesType), fmt.Sprintf("process_metric_%d_total", i))
+		if i%2 == 0 {
+			metric = append(metric, bytesField(5, points)...)
+		} else {
+			sum := append(points, varintField(2, uint64(pmetric.AggregationTemporalityCumulative))...)
+			sum = append(sum, varintField(3, 1)...)
+			metric = append(metric, bytesField(7, sum)...)
+		}
+
+		scopeMetrics = appendRepeatedMessages(scopeMetrics, 2, metric)
+	}
+
+	resourceMetrics := append(bytesField(1, resource), bytesField(2, scopeMetrics)...)
+	return wrapAsRequest(resourceMetrics)
 }
 
 // ========== Metric.Metadata ==========

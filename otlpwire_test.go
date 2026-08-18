@@ -1488,10 +1488,14 @@ func TestMetricName_Absent(t *testing.T) {
 	require.Nil(t, name)
 }
 
-// TestMetricName_LastValueWins covers the E-2942 change from first-match to
-// protobuf singular-scalar semantics. pdata assigns on each occurrence, so the
-// last one wins; the previous first-match behavior diverged.
-func TestMetricName_LastValueWins(t *testing.T) {
+// TestMetricName_FirstMatchDivergesFromPdata pins the E-2985 divergence.
+// pdata assigns on each occurrence, so a repeated name resolves to the last
+// one there; Name scans first-match and returns the first. The divergence is
+// deliberate -- reaching the last occurrence means walking every metric to its
+// end, which a conformant producer never makes necessary. See the "Singular
+// scalars" section of docs/DESIGN.md and the deviation table in
+// operations.md.
+func TestMetricName_FirstMatchDivergesFromPdata(t *testing.T) {
 	var m Metric
 	m = protowire.AppendTag(m, 1, protowire.BytesType)
 	m = protowire.AppendString(m, "first")
@@ -1502,25 +1506,20 @@ func TestMetricName_LastValueWins(t *testing.T) {
 
 	name, err := m.Name()
 	require.NoError(t, err)
-	require.Equal(t, "second", string(name))
+	require.Equal(t, "first", string(name), "otlp-wire returns the first occurrence")
 
-	// pdata is the oracle: wrap the metric into a full request and compare.
-	sm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	sm = protowire.AppendVarint(sm, uint64(len(m)))
-	sm = append(sm, m...)
-	rm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	rm = protowire.AppendVarint(rm, uint64(len(sm)))
-	rm = append(rm, sm...)
-
+	// pdata is the oracle for what we are diverging from: wrap the metric into
+	// a full request and show it resolves the other way.
 	req := pmetricotlp.NewExportRequest()
-	require.NoError(t, req.UnmarshalProto(wrapAsRequest(rm)))
+	require.NoError(t, req.UnmarshalProto(metricsPayloadWithMetric(m)))
 	require.Equal(t, "second",
-		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name())
+		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name(),
+		"pdata resolves the same bytes to the last occurrence")
 }
 
-// TestMetricName_UnclosedGroupIsStricterThanPdata pins the one direction in
-// which the widened scan disagrees with pdata. protowire's field skip requires
-// a start-group to have its matching end-group; pdata's unknown-field skip
+// TestSchemaUrl_UnclosedGroupIsStricterThanPdata pins the one direction in
+// which a full scan disagrees with pdata. protowire's field skip requires a
+// start-group to have its matching end-group; pdata's unknown-field skip
 // returns as soon as it consumes a non-group wire type, even inside an
 // unclosed group. So this payload is an error here and accepted there.
 //
@@ -1528,43 +1527,51 @@ func TestMetricName_LastValueWins(t *testing.T) {
 // "Instrumentation scope and schema URL" section of docs/specification.md).
 // Groups are proto2-only and OTLP never emits them. This test exists so the
 // behavior cannot change silently.
-func TestMetricName_UnclosedGroupIsStricterThanPdata(t *testing.T) {
-	var m Metric
-	m = protowire.AppendTag(m, 1, protowire.BytesType)
-	m = protowire.AppendString(m, "requests")
+//
+// It covers ScopeMetrics.SchemaUrl rather than Metric.Name: since E-2985 Name
+// scans first-match and stops before any trailing corruption, so the accessors
+// that still walk to the end of the message are the ones that carry this
+// behavior.
+func TestSchemaUrl_UnclosedGroupIsStricterThanPdata(t *testing.T) {
+	var sm ScopeMetrics
+	sm = protowire.AppendTag(sm, 3, protowire.BytesType)
+	sm = protowire.AppendString(sm, "https://example.com/schema")
 	// Unknown field 8 as a start-group holding a fixed32, with no end-group.
-	m = protowire.AppendTag(m, 8, protowire.StartGroupType)
-	m = protowire.AppendTag(m, 6, protowire.Fixed32Type)
-	m = protowire.AppendFixed32(m, 0)
-
-	sm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	sm = protowire.AppendVarint(sm, uint64(len(m)))
-	sm = append(sm, m...)
-	rm := protowire.AppendTag(nil, 2, protowire.BytesType)
-	rm = protowire.AppendVarint(rm, uint64(len(sm)))
-	rm = append(rm, sm...)
+	sm = protowire.AppendTag(sm, 8, protowire.StartGroupType)
+	sm = protowire.AppendTag(sm, 6, protowire.Fixed32Type)
+	sm = protowire.AppendFixed32(sm, 0)
 
 	req := pmetricotlp.NewExportRequest()
-	require.NoError(t, req.UnmarshalProto(wrapAsRequest(rm)),
+	require.NoError(t, req.UnmarshalProto(wrapAsRequest(resourceContainerWithScope(sm))),
 		"pdata tolerates the unclosed group")
-	require.Equal(t, "requests",
-		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).Name())
+	require.Equal(t, "https://example.com/schema",
+		req.Metrics().ResourceMetrics().At(0).ScopeMetrics().At(0).SchemaUrl())
 
-	_, err := m.Name()
+	_, err := sm.SchemaUrl()
 	require.Error(t, err, "otlp-wire rejects it: group validation is strict")
 }
 
-// TestMetricName_MalformedTrailingField pins the validation-scope consequence
-// of the full scan: corruption after the last name occurrence is now reported.
-func TestMetricName_MalformedTrailingField(t *testing.T) {
+// TestMetricName_MalformedTrailingFieldNotReported pins the validation-scope
+// consequence of first-match: Name returns at field 1 and never reaches the
+// corruption behind it, so these bytes are valid here and rejected by pdata,
+// which decodes the whole message. This is the narrower validity claim
+// E-2985 accepted in exchange for the early return; accessors that still walk
+// the message keep reporting trailing corruption, as
+// TestResource_MalformedTrailingFieldAfterResource covers.
+func TestMetricName_MalformedTrailingFieldNotReported(t *testing.T) {
 	var m Metric
 	m = protowire.AppendTag(m, 1, protowire.BytesType)
 	m = protowire.AppendString(m, "requests")
 	m = protowire.AppendTag(m, 3, protowire.BytesType)
 	m = protowire.AppendVarint(m, 64) // declares more than it carries
 
-	_, err := m.Name()
-	require.Error(t, err)
+	name, err := m.Name()
+	require.NoError(t, err)
+	require.Equal(t, "requests", string(name))
+
+	req := pmetricotlp.NewExportRequest()
+	require.Error(t, req.UnmarshalProto(metricsPayloadWithMetric(m)),
+		"pdata decodes the whole metric and rejects the truncated unit")
 }
 
 // buildAllTypesMetrics builds one metric of each of the five types, each

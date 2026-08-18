@@ -346,9 +346,11 @@ name, err := scope.Name()
 Fields OTLP declares `repeated` — the attribute fields and `Metric.Metadata` —
 yield every occurrence in wire order instead. Singular *messages*
 (`Resource()`, `Scope()`) merge, while singular *scalars* (`SchemaUrl()`,
-`InstrumentationScope.Name()` and `Version()`, `Metric.Name()`)
-resolve to the last occurrence. `KeyValue.Key` and `KeyValue.ValueRaw` are
-deliberately exempt and stay first-match for hashing hot paths.
+`InstrumentationScope.Name()` and `Version()`)
+resolve to the last occurrence. `Metric.Name()`, `KeyValue.Key` and
+`KeyValue.ValueRaw` are deliberately exempt and stay first-match, because
+resolving them the other way costs a full message walk on every conformant
+payload.
 [docs/DESIGN.md](docs/DESIGN.md) explains why.
 
 `KeyValue.ValueRaw` remains a lightweight view of the first encoded AnyValue

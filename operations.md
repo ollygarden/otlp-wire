@@ -37,8 +37,8 @@ published one means a consumer version pin.
 | `ResourceLogs.StringAttribute` removed | E-2941 | mulch (only consumer with source to change) |
 | `Resource()` returns `(nil, nil)` for an absent Resource instead of an error | E-2941 | Any consumer treating that error as a signal; not firing in production as of 2026-08-07 |
 | `Resource()` merges repeated occurrences instead of returning the first | E-2941 | Consumers reading resource attributes from multi-occurrence payloads |
-| `Resource()`, `Scope()` and the singular-scalar accessors report corruption located after the last relevant occurrence | E-2941, E-2942 | Consumers that previously parsed such payloads without error |
-| `Metric.Name()` returns the last occurrence of a repeated `name` instead of the first | E-2942 | Consumers reading names from payloads with a repeated `Metric.name` |
+| `Resource()`, `Scope()` and the last-value-wins scalar accessors report corruption located after the last relevant occurrence | E-2941, E-2942 | Consumers that previously parsed such payloads without error |
+| `Metric.Name()` returns the first occurrence of a repeated `name`, where pdata takes the last, and accepts corruption located after the `name` field | E-2985 | Consumers pairing the wire path with a pdata fallback; only reachable on a repeated or malformed `Metric.name` |
 | Scanning accessors reject an unclosed group in an unknown trailing field, which pdata accepts | E-2942 | Consumers pairing the wire path with a pdata fallback; only reachable on malformed or adversarial input, never on conformant OTLP |
 
 The canary decision and its measured pre/post comparison are recorded at
@@ -144,6 +144,39 @@ LogRecord equivalent, since `parseLogRecordSeverity` does descend into the body
 and attributes. [docs/DESIGN.md](docs/DESIGN.md) records both decisions. A
 consumer cannot conclude "pdata would also accept this" from a successful Span
 accessor read.
+
+### Diagnosing the Metric accessors
+
+`Metric.Name` scans first-match and stops at field 1. `Metric.Metadata`,
+`MetadataSeq` and `DataPoints` walk what they read. Two consequences when
+reading a consumer's CPU profile:
+
+- **`Name` is cheap and its cost does not track the metric's field count.**
+  A metric path that slows down is not `Name`; look at the datapoint and
+  attribute iteration instead. This is the opposite of the last-value-wins
+  scalars on the containers above, whose cost does grow with the enclosing
+  message.
+- **What `Name` costs depends on where the producer puts the field.** It
+  returns at the first `name` tag, so an SDK exporter emitting ascending field
+  numbers pays almost nothing, while pdata-marshalled bytes put `name` last
+  and make it walk the metric anyway. A benchmark built only from pdata
+  fixtures cannot see the difference between the two resolutions — that is how
+  the regression E-2985 fixed stayed invisible to the benchmark meant to guard
+  it. `BenchmarkMetric_Name_SDKOrder` exists for this reason; keep both arms.
+
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) carries the figures, with the fixture,
+environment and commands. Do not copy them here.
+
+**Known divergences from pdata.** These matter only to consumers that pair the
+wire path with a pdata fallback and expect the two to agree. Both are reachable
+only on malformed or adversarial input, never on conformant OTLP.
+`TestMetricName_FirstMatchDivergesFromPdata` and
+`TestMetricName_MalformedTrailingFieldNotReported` pin them.
+
+| Input | Wire path | pdata |
+| --- | --- | --- |
+| Repeated `Metric.name` | reports the **first** occurrence | reports the last |
+| Corruption located after the `name` field | `Name` accepts | rejects |
 
 ### The deprecated scope containers (field 1000)
 

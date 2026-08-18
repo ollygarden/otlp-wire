@@ -94,8 +94,12 @@ accessors, alongside the per-message schema walks `parseLogRecordSeverity` and
   merge (`extractMergedMessage`) for messages, last-value-wins
   (`extractLastBytesField`) for scalars. Verify the choice against pdata's
   generated unmarshal — merge appends, replacement assigns. Check the `.proto`
-  declaration first: neither helper applies to a `repeated` field. See
-  "Singular field resolution" in [docs/DESIGN.md](docs/DESIGN.md).
+  declaration first: neither helper applies to a `repeated` field. First-match
+  (`extractBytesField`) is a legitimate third answer for a scalar on a hot
+  path, but it is a divergence from pdata and must be priced, pinned by test
+  and recorded in [operations.md](operations.md) — `Metric.Name` (E-2985) and
+  `KeyValue.Key` are the precedents. See "Singular field resolution" in
+  [docs/DESIGN.md](docs/DESIGN.md).
 - Before reaching for either helper, check whether an existing schema-aware
   walk already covers that message — `parseLogRecordSeverity` for `LogRecord`,
   `parseSpanFields` for `Span`. If one does, read the field out of that walk
@@ -108,12 +112,13 @@ accessors, alongside the per-message schema walks `parseLogRecordSeverity` and
   Moving a first-match accessor onto a full walk costs every conformant
   message to change behavior only malformed ones can show, since a conformant
   producer emits each singular field once. E-2945 measured that for `Span` and
-  left `TraceID`/`SpanID`/`ParentSpanID` on first-match; the two parser classes
-  and the divergence they produce are pinned by test and recorded in
+  left `TraceID`/`SpanID`/`ParentSpanID` on first-match; E-2985 measured it for
+  `Metric.Name` and moved it back to first-match. In both cases the two parser
+  classes and the divergence they produce are pinned by test and recorded in
   [operations.md](operations.md). Measure with a paired benchmark against a
   merge-base checkout, and note that a pdata-marshalled fixture hides the cost:
-  pdata writes fields back-to-front, so `trace_id` lands last where a real SDK
-  exporter puts it first.
+  pdata writes fields back-to-front, so `trace_id` and `Metric.name` land last
+  where a real SDK exporter puts them first.
 - Walk *depth* is a separate decision from walk *sharing*. Descend only into
   nested messages a consumer of that accessor reads next: `parseSpanFields` is
   framing-only below the Span level, where `parseLogRecordSeverity` parses the
