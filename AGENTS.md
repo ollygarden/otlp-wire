@@ -121,13 +121,13 @@ accessors, alongside the per-message schema walks `parseLogRecordSeverity` and
   where a real SDK exporter puts them first.
 - Walk *depth* is a separate decision from walk *sharing*. Descend only into
   nested messages a consumer of that accessor reads next: `parseSpanFields` is
-  framing-only below the Span level, where `parseLogRecordSeverity` parses the
-  body and attributes because severity consumers read them. A shallower walk
-  means a narrower validity claim than pdata's — pin the resulting divergences
-  in a test.
-- Malformed tags, lengths, wire types, identifiers, metric bodies, or nested
-  messages must return parse errors. Never silently accept corruption to keep
-  an iterator moving.
+  framing-only below the Span level, while `parseLogRecordSeverity` parses the
+  body and attributes in strict mode. A shallower walk means a narrower validity
+  claim than pdata's — pin the resulting divergences in a test.
+- Malformed input inside the documented validation depth must return a parse
+  error. A field-scoped operation may treat unrelated nested messages as opaque
+  only when its narrower validity claim is explicit and pinned by tests. Never
+  silently accept corruption to keep an iterator moving.
 - `WriteTo` reconstructs the enclosing repeated-field message without a full
   unmarshal. Preserve byte-level output semantics and short-write/error
   propagation.

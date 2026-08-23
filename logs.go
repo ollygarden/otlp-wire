@@ -146,7 +146,7 @@ func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) {
 // the positive OTLP severity ranges. Use Severity to read both severity fields
 // from one walk.
 func (r LogRecord) SeverityNumber() (int32, error) {
-	number, _, err := parseLogRecordSeverity([]byte(r))
+	number, _, err := parseLogRecordSeverity([]byte(r), true)
 	return number, err
 }
 
@@ -159,7 +159,7 @@ func (r LogRecord) SeverityNumber() (int32, error) {
 // the whole LogRecord, so an early severity_text cannot conceal corruption
 // that follows it. Use Severity to read both severity fields from one walk.
 func (r LogRecord) SeverityText() ([]byte, error) {
-	_, text, err := parseLogRecordSeverity([]byte(r))
+	_, text, err := parseLogRecordSeverity([]byte(r), true)
 	return text, err
 }
 
@@ -172,7 +172,18 @@ func (r LogRecord) SeverityText() ([]byte, error) {
 // These are the raw wire fields. Classifying them into severity bands, and
 // deciding which one wins when they disagree, stay consumer policy.
 func (r LogRecord) Severity() (int32, []byte, error) {
-	return parseLogRecordSeverity([]byte(r))
+	return parseLogRecordSeverity([]byte(r), true)
+}
+
+// SeverityFields returns severity_number (field 2) and severity_text (field 3)
+// while validating the complete top-level LogRecord framing. Unlike Severity,
+// it does not validate the contents of body or attribute messages. Use this
+// operation when those unrelated nested values are not consumed next.
+//
+// Repeated severity fields resolve to the last occurrence. The returned text
+// has the same aliasing, nil, empty, and capacity contracts as SeverityText.
+func (r LogRecord) SeverityFields() (int32, []byte, error) {
+	return parseLogRecordSeverity([]byte(r), false)
 }
 
 // countLogRecords counts the number of log records in an OTLP
@@ -196,13 +207,11 @@ func countInScopeLogs(data []byte) (int, error) {
 	return countOccurrences(data, 2)
 }
 
-// parseLogRecordSeverity validates every known LogRecord field in pdata v1.64.0
-// while extracting severity_number and severity_text with protobuf
-// last-value-wins scalar semantics. This is intentionally schema-aware: an
-// early valid severity cannot conceal a malformed body, attribute, timestamp,
-// identifier, or trailing known field. Both severity accessors share the walk
-// so neither can drift from the other's malformed-input behavior.
-func parseLogRecordSeverity(data []byte) (int32, []byte, error) {
+// parseLogRecordSeverity walks every known top-level LogRecord field while
+// extracting severity_number and severity_text with protobuf last-value-wins
+// scalar semantics. validateNested additionally validates body and attribute
+// contents for the strict severity accessors.
+func parseLogRecordSeverity(data []byte, validateNested bool) (int32, []byte, error) {
 	pos := 0
 	var number int32
 	var text []byte
@@ -256,8 +265,10 @@ func parseLogRecordSeverity(data []byte) (int32, []byte, error) {
 			if n < 0 {
 				return 0, nil, errors.New("invalid bytes in log record body")
 			}
-			if err := parseAnyValue(body, &parsedAnyValue{}); err != nil {
-				return 0, nil, err
+			if validateNested {
+				if err := parseAnyValue(body, &parsedAnyValue{}); err != nil {
+					return 0, nil, err
+				}
 			}
 			pos += n
 		case 6: // attributes
@@ -268,8 +279,10 @@ func parseLogRecordSeverity(data []byte) (int32, []byte, error) {
 			if n < 0 {
 				return 0, nil, errors.New("invalid bytes in log record attributes")
 			}
-			if _, _, _, err := parseKeyValue(attribute); err != nil {
-				return 0, nil, err
+			if validateNested {
+				if _, _, _, err := parseKeyValue(attribute); err != nil {
+					return 0, nil, err
+				}
 			}
 			pos += n
 		case 7: // dropped_attributes_count

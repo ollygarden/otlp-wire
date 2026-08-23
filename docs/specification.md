@@ -403,6 +403,12 @@ two walks where `Severity` costs one.
 All three severity accessors read from one schema-aware walk of the whole
 LogRecord, so they accept and reject exactly the same bytes.
 
+`LogRecord.SeverityFields` returns the same pair with the same last-value-wins,
+aliasing, nil, and empty-value contracts. It validates every known top-level
+LogRecord field and complete message framing, but treats body and attribute
+messages as opaque length-delimited values. Malformed contents inside those
+nested values are therefore outside this operation's validity claim.
+
 The library does not classify severity bands, and `Severity` returning the two
 fields together does not rank them: which one wins when the number and the text
 disagree remains consumer policy.

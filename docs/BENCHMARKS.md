@@ -691,6 +691,36 @@ severity read; every arm pays the same. A consumer that wants a
 `string` rather than a view pays for that conversion at its own call site,
 which is where the allocation belongs.
 
+### Field-scoped severity lookup
+
+`SeverityFields` keeps the complete top-level walk but skips recursive body and
+attribute validation. The fixture is the same 5 resources × 100 records used
+above. This comparison ran on an Apple M5, darwin/arm64, Go 1.26.6, using one
+prebuilt binary and 15 alternating 3,000-iteration rounds:
+
+```bash
+go test -c -o /tmp/otlpwire.test .
+for round in $(seq 1 15); do
+  for arm in Severity SeverityFields; do
+    /tmp/otlpwire.test -test.run '^$' -test.benchmem -test.benchtime=3000x \
+      -test.bench "^BenchmarkLogRecord_${arm}\$"
+  done
+done
+```
+
+| Benchmark | validation depth | ns/op (median of 15) | B/op | allocs/op |
+|---|---|---:|---:|---:|
+| `BenchmarkLogRecord_Severity` | nested body and attributes | 36,859 | 368 | 14 |
+| `BenchmarkLogRecord_SeverityFields` | top-level record | 17,948 | 368 | 14 |
+
+The field-scoped operation was **51.2% faster at the paired median and faster
+in all 15 rounds**; paired deltas ranged from −55.6% to −46.9%. Allocations are
+unchanged and belong to the enclosing iterators; both accessors are themselves
+zero-allocation. A separate 15-round merge-base-versus-candidate comparison of
+the existing strict `Severity` path found no regression: the paired median was
+−0.4%, with the candidate faster in 9 of 15 noisy rounds and unchanged
+allocations.
+
 ## Span field accessors (E-2945)
 
 **Environment for every measurement in this section:** 11th Gen Intel Core

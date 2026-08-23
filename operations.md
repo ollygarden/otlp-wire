@@ -70,11 +70,21 @@ valid. Two consequences when reading a consumer's CPU profile:
   per-record cost but do not show how it scales with body and attribute
   volume; a consumer suspecting that scaling should measure its own payloads.
 
+`SeverityFields` is the field-scoped alternative for consumers that read only
+the two severity fields. It shares the same complete top-level walk and
+last-value-wins resolution, while treating body and attribute messages as
+opaque length-delimited values. It still rejects malformed record framing,
+wrong top-level wire types, and truncated nested values, but accepts malformed
+contents inside a correctly framed body or attribute. Use the strict accessors
+when those nested values are consumed next or full-record validation is part of
+the caller's contract. `TestLogRecordSeverityFields_ValidationScope` pins this
+boundary.
+
 **Known divergences from pdata.** These matter only to consumers that pair the
-wire path with a pdata fallback and expect the two to agree on validity. All
-are reachable only on malformed or adversarial input, never on conformant OTLP
-from a normal producer, and none is specific to one accessor — they are
-properties of the shared LogRecord walk. `TestLogRecordSeverity_PdataDivergence`
+strict accessors with a pdata fallback and expect the two to agree on validity.
+All are reachable only on malformed or adversarial input, never on conformant
+OTLP from a normal producer, and none is specific to one strict accessor — they
+are properties of the strict LogRecord walk. `TestLogRecordSeverity_PdataDivergence`
 pins each one, so a change in either direction shows up as a test failure
 rather than as silently different consumer behavior.
 
