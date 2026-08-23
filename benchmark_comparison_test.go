@@ -1622,6 +1622,24 @@ func BenchmarkLogRecord_Severity(b *testing.B) {
 	}
 }
 
+func BenchmarkLogRecord_SeverityFields(b *testing.B) {
+	payload := benchSeverityTextPayload(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		total := 0
+		forEachBenchLogRecord(b, payload, func(record LogRecord) {
+			number, text, err := record.SeverityFields()
+			if err != nil {
+				b.Fatal(err)
+			}
+			total += int(number) + len(text)
+		})
+		benchSeveritySink = total
+	}
+}
+
 // ========== Span field accessors: overstory's internal-spans detector ==========
 
 // benchSpanFieldsSink prevents the internal-span analysis from being optimized

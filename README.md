@@ -126,7 +126,8 @@ ExportLogsServiceRequest (OTLP message bytes)
             └─ LogRecord[]
                  ├─ SeverityNumber()
                  ├─ SeverityText()
-                 └─ Severity()      (both fields, one walk)
+                 ├─ Severity()       (both fields, strict nested validation)
+                 └─ SeverityFields() (both fields, top-level validation)
 
 ExportTracesServiceRequest (OTLP message bytes)
   └─ ResourceSpans[] (one per resource)
@@ -283,6 +284,7 @@ type LogRecord []byte
 func (r LogRecord) SeverityNumber() (int32, error)
 func (r LogRecord) SeverityText() ([]byte, error)
 func (r LogRecord) Severity() (int32, []byte, error) // both fields, one walk
+func (r LogRecord) SeverityFields() (int32, []byte, error) // skips nested body/attribute validation
 
 type Resource []byte
 func (r Resource) Attributes() (iter.Seq[KeyValue], func() error)
@@ -304,6 +306,10 @@ both fields — the single-field pair costs a measured ~1.9x
 described above for each field. Ranking them is consumer policy: the library
 does not classify severity bands, nor decide which field wins when the number
 and the text disagree.
+
+`LogRecord.SeverityFields` shares that top-level walk and field resolution but
+does not recursively validate body or attribute contents. It is the scoped
+operation for detectors that do not consume those nested values next.
 
 `Resource.StringAttribute` is zero-copy and returns a separate `found` value,
 so a missing resource attribute can be distinguished from a present empty

@@ -168,6 +168,14 @@ machinery, since the walk already produced both values, and all three accessors
 share it, so none of them can disagree with another about whether a record is
 valid.
 
+`SeverityFields` uses the same top-level parser and field resolution with a
+narrower depth contract. It validates the complete LogRecord framing and each
+known top-level wire type, but skips semantic parsing inside body and attribute
+messages. This keeps the operation centralized in otlp-wire without making a
+detector that reads only severity pay for unrelated nested values. The strict
+three-accessor contract remains unchanged, and tests pin the intentional
+validity divergence for malformed nested contents.
+
 Severity *classification* stays out of the library. Bands and number/text
 precedence are consumer policy, and nothing in the consumer audit argues
 otherwise. `Severity` returns the raw wire fields; deciding which one wins when
@@ -210,15 +218,12 @@ the divergence risk in [operations.md](../operations.md), taken knowingly here
 rather than engineered away, and pinned by
 `TestSpanIdentifiers_FirstMatchDivergence` so it cannot drift unnoticed.
 
-**The walk is framing-only below the Span level.** It checks the wire type and
-containment of `attributes`, `events`, `links` and `status` without parsing
-their contents, where the LogRecord walk does descend into the body and every
-attribute. The discriminator is what the accessor's own consumer reads next: a
-severity consumer reads the record's attributes, and sage's parity requirement
-made validating them load-bearing, whereas none of the Span fields this package
-exposes depends on a span's attributes, events or links. Descending anyway
-would tie every scalar accessor's cost to a span's event and attribute count
-for no accessor's benefit.
+**Validation depth follows the operation's contract.** The Span walk checks the
+wire type and containment of `attributes`, `events`, `links` and `status`
+without parsing their contents. The strict LogRecord severity accessors descend
+into body and attributes; `SeverityFields` treats them as opaque because its
+consumers read neither. Descending into unrelated values would tie every scalar
+lookup's cost to nested content it does not return.
 
 The cost is a narrower validity claim than pdata's: malformed *contents* inside
 a correctly framed `attributes`, `events`, `links` or `status` are accepted here

@@ -245,6 +245,11 @@ func TestLogRecordSeverity_MatchesPdataAndSingleAccessors(t *testing.T) {
 			// express. The expected values rely on that.
 			require.Equal(t, tt.expectedText, text)
 
+			fieldNumber, fieldText, err := record.SeverityFields()
+			require.NoError(t, err)
+			require.Equal(t, number, fieldNumber)
+			require.Equal(t, text, fieldText)
+
 			singleNumber, err := record.SeverityNumber()
 			require.NoError(t, err)
 			singleText, err := record.SeverityText()
@@ -255,6 +260,71 @@ func TestLogRecordSeverity_MatchesPdataAndSingleAccessors(t *testing.T) {
 			pdataNumber, pdataText := pdataSeverity(t, tt.record)
 			require.Equal(t, tt.expectedNumber, pdataNumber)
 			require.Equal(t, string(tt.expectedText), pdataText)
+		})
+	}
+}
+
+func TestLogRecordSeverityFields_ValidationScope(t *testing.T) {
+	severity := slices.Concat(
+		severityNumberField(plog.SeverityNumberInfo),
+		severityTextField("INFO"),
+	)
+
+	tests := []struct {
+		name   string
+		record LogRecord
+	}{
+		{
+			name:   "malformed body contents",
+			record: slices.Concat(severity, []byte{0x2a, 0x02, 0x0a, 0x80}),
+		},
+		{
+			name:   "malformed attribute contents",
+			record: slices.Concat(severity, []byte{0x32, 0x02, 0x08, 0x01}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			number, text, err := tt.record.SeverityFields()
+			require.NoError(t, err)
+			require.Equal(t, int32(plog.SeverityNumberInfo), number)
+			require.Equal(t, []byte("INFO"), text)
+
+			_, _, err = tt.record.Severity()
+			require.Error(t, err, "Severity retains nested-message validation")
+		})
+	}
+
+}
+
+func TestLogRecordSeverityFields_TopLevelValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		record LogRecord
+	}{
+		{name: "malformed tag", record: LogRecord{0x80}},
+		{name: "time wrong wire type", record: LogRecord{0x0a, 0x01, 0x00}},
+		{name: "observed time wrong wire type", record: LogRecord{0x5a, 0x01, 0x00}},
+		{name: "severity number wrong wire type", record: LogRecord{0x12, 0x01, 0x00}},
+		{name: "severity text wrong wire type", record: LogRecord{0x18, 0x01}},
+		{name: "event name wrong wire type", record: LogRecord{0x60, 0x01}},
+		{name: "body wrong wire type", record: LogRecord{0x28, 0x01}},
+		{name: "body truncated", record: LogRecord{0x2a, 0x02, 0x00}},
+		{name: "attribute wrong wire type", record: LogRecord{0x30, 0x01}},
+		{name: "attribute truncated", record: LogRecord{0x32, 0x02, 0x00}},
+		{name: "dropped attributes wrong wire type", record: LogRecord{0x3a, 0x01, 0x00}},
+		{name: "flags wrong wire type", record: LogRecord{0x40, 0x01}},
+		{name: "trace id wrong wire type", record: LogRecord{0x48, 0x01}},
+		{name: "trace id wrong size", record: LogRecord{0x4a, 0x01, 0x00}},
+		{name: "span id wrong wire type", record: LogRecord{0x50, 0x01}},
+		{name: "span id wrong size", record: LogRecord{0x52, 0x01, 0x00}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := tt.record.SeverityFields()
+			require.Error(t, err)
 		})
 	}
 }
@@ -409,6 +479,10 @@ func TestLogRecordSeverity_ViewAndAllocationContract(t *testing.T) {
 	require.Equal(t, int32(plog.SeverityNumberInfo), number)
 	require.Equal(t, len(text), cap(text), "capacity must be clamped so a caller's append reallocates")
 	require.Equal(t, len(combinedText), cap(combinedText), "capacity must be clamped so a caller's append reallocates")
+	fieldNumber, fieldText, err := record.SeverityFields()
+	require.NoError(t, err)
+	require.Equal(t, number, fieldNumber)
+	require.Equal(t, len(fieldText), cap(fieldText), "capacity must be clamped so a caller's append reallocates")
 
 	require.Equal(t, "INFOoverwritten", string(append(text, "overwritten"...)))
 	require.Equal(t, "INFOoverwritten", string(append(combinedText, "overwritten"...)))
@@ -420,6 +494,7 @@ func TestLogRecordSeverity_ViewAndAllocationContract(t *testing.T) {
 	record[index] = 'i'
 	require.Equal(t, []byte("iNFO"), text)
 	require.Equal(t, []byte("iNFO"), combinedText)
+	require.Equal(t, []byte("iNFO"), fieldText)
 
 	allocations := testing.AllocsPerRun(100, func() {
 		got, err := record.SeverityText()
@@ -433,6 +508,14 @@ func TestLogRecordSeverity_ViewAndAllocationContract(t *testing.T) {
 		number, got, err := record.Severity()
 		if err != nil || number != int32(plog.SeverityNumberInfo) || len(got) == 0 {
 			t.Fatal("unexpected severity result")
+		}
+	})
+	require.Zero(t, allocations)
+
+	allocations = testing.AllocsPerRun(100, func() {
+		number, got, err := record.SeverityFields()
+		if err != nil || number != int32(plog.SeverityNumberInfo) || len(got) == 0 {
+			t.Fatal("unexpected severity fields result")
 		}
 	})
 	require.Zero(t, allocations)
