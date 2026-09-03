@@ -311,6 +311,56 @@ func extractBytesField(data []byte, fieldNum protowire.Number) ([]byte, error) {
 	return nil, nil
 }
 
+// extractBytesFields extracts the first occurrence of two length-delimited
+// fields in one scan. It stops after both are found, matching the combined
+// validation scope of calling extractBytesField for each field separately.
+// Returned slices alias data with their capacities clamped to their lengths.
+func extractBytesFields(data []byte, firstNum, secondNum protowire.Number) ([]byte, []byte, error) {
+	var first, second []byte
+	var firstFound, secondFound bool
+	pos := 0
+
+	for pos < len(data) {
+		num, wireType, tagLen := protowire.ConsumeTag(data[pos:])
+		if tagLen < 0 {
+			return nil, nil, errors.New("malformed protobuf tag")
+		}
+		pos += tagLen
+
+		selected := (num == firstNum && !firstFound) || (num == secondNum && !secondFound)
+		if selected {
+			if wireType != protowire.BytesType {
+				return nil, nil, errors.New("wrong wire type for field")
+			}
+			field, n := protowire.ConsumeBytes(data[pos:])
+			if n < 0 {
+				return nil, nil, errors.New("invalid bytes in field")
+			}
+			pos += n
+			field = field[:len(field):len(field)]
+			if num == firstNum {
+				first = field
+				firstFound = true
+			} else {
+				second = field
+				secondFound = true
+			}
+			if firstFound && secondFound {
+				return first, second, nil
+			}
+			continue
+		}
+
+		n := skipField(data[pos:], num, wireType)
+		if n < 0 {
+			return nil, nil, errors.New("failed to skip field")
+		}
+		pos += n
+	}
+
+	return first, second, nil
+}
+
 // extractLastBytesField extracts a singular length-delimited scalar field,
 // resolving repeated occurrences by last-value-wins the way protobuf and
 // pdata do. Returns nil (not an error) if absent; the returned slice aliases

@@ -20,6 +20,13 @@ func (kv KeyValue) ValueRaw() ([]byte, error) {
 	return extractBytesField([]byte(kv), 2)
 }
 
+// Fields returns the attribute key and raw AnyValue message bytes as views
+// into the underlying buffer. It resolves both fields in one scan with the
+// same first-match behavior as calling Key followed by ValueRaw.
+func (kv KeyValue) Fields() (key, valueRaw []byte, err error) {
+	return extractBytesFields([]byte(kv), 1, 2)
+}
+
 // StringValue returns the string value in the KeyValue's AnyValue, if it has
 // one. The bool reports whether a string value was present; an empty string is
 // present and is returned as a non-nil, zero-length slice. The returned slice

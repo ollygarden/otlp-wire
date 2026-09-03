@@ -283,10 +283,14 @@ if err != nil { /* ... */ }
 value, found, err := resource.StringAttribute("service.name")
 ```
 
-`KeyValue.Key` and `ValueRaw` are lightweight views of the first matching
-encoded field. `KeyValue.StringValue` is the semantic string accessor: it
-validates the complete KeyValue and AnyValue structure and applies protobuf
-oneof ordering. These two classes of accessor are deliberately different.
+`KeyValue.Key`, `ValueRaw`, and the combined `Fields` accessor are lightweight
+views of the first matching encoded fields. `Fields` resolves both views in
+one scan and has the same combined validation scope as calling `Key` followed
+by `ValueRaw`; each result is independent, so an absent field returns nil
+without hiding the other result. `KeyValue.StringValue` is the semantic string
+accessor: it validates the complete KeyValue and AnyValue structure and applies
+protobuf oneof ordering. These two classes of accessor are deliberately
+different.
 
 ### Instrumentation scope and schema URL
 

@@ -12,6 +12,20 @@ import (
 	"go.olly.garden/otlp-wire"
 )
 
+// ExampleKeyValue_Fields reads the two raw fields needed by hashing consumers
+// with one scan of the KeyValue envelope.
+func ExampleKeyValue_Fields() {
+	raw := []byte{0x0a, 0x13, 'h', 't', 't', 'p', '.', 'r', 'e', 'q', 'u', 'e', 's', 't', '.', 'm', 'e', 't', 'h', 'o', 'd', 0x12, 0x05, 0x0a, 0x03, 'G', 'E', 'T'}
+
+	key, valueRaw, err := otlpwire.KeyValue(raw).Fields()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Printf("%s raw-value-bytes=%d\n", key, len(valueRaw))
+	// Output: http.request.method raw-value-bytes=5
+}
+
 // Example_observabilityStats demonstrates using Count() for observability metrics.
 func Example_observabilityStats() {
 	// Simulate receiving OTLP metrics data

@@ -823,6 +823,38 @@ actually takes.
 Drop the hand-rolled arm and this subsection once overstory moves to the Span
 accessors.
 
+## KeyValue combined field access (E-3340)
+
+marigold hashes every metric metadata entry and datapoint attribute from both
+the `KeyValue.key` and raw `KeyValue.value` fields. Calling `Key` followed by
+`ValueRaw` walks the same envelope twice; `Fields` resolves the same two
+first-match views in one walk.
+
+**Environment:** Apple M5, darwin/arm64, Go 1.26.6.
+
+**Fixture:** one KeyValue containing a 27-byte key followed by a string-valued
+AnyValue. Both arms return capacity-clamped, zero-copy views and write their
+lengths to the same package-level sink.
+
+**Method:** one prebuilt test binary, six alternating 1-second rounds. Medians
+of six:
+
+```bash
+go test -c -o keyvalue-fields.test .
+for round in 1 2 3 4 5 6; do
+  ./keyvalue-fields.test -test.run '^$' -test.bench '^BenchmarkKeyValueFields/separate$' -test.benchmem -test.benchtime=1s
+  ./keyvalue-fields.test -test.run '^$' -test.bench '^BenchmarkKeyValueFields/combined$' -test.benchmem -test.benchtime=1s
+done
+```
+
+| Access | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| `Key` then `ValueRaw` | 12.25 | 0 | 0 |
+| `Fields` | 9.07 | 0 | 0 |
+
+The combined accessor is **25.9% faster** at the median. Every paired round
+favored it; the measured ranges were 11.75–13.63 ns/op and 8.62–9.87 ns/op.
+
 ## Metric.Name resolution (E-2985)
 
 E-2985 moved `Metric.Name` back to first-match (`extractBytesField`) from the
