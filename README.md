@@ -360,10 +360,11 @@ resolving them the other way costs a full message walk on every conformant
 payload.
 [docs/DESIGN.md](docs/DESIGN.md) explains why.
 
-`KeyValue.Fields` returns the first encoded key and AnyValue fields in one
-lightweight scan for hashing-oriented hot paths. `Key` and `ValueRaw` expose
-the same views independently. `KeyValue.StringValue` fully parses AnyValue
-and follows protobuf oneof behavior, so a later non-string oneof member makes
+`KeyValue.Fields` returns the first encoded key and raw AnyValue message bytes
+as zero-copy views in one lightweight scan for hashing-oriented hot paths. It
+returns nil independently for each absent field. `Key` and `ValueRaw` expose
+the same views separately. `KeyValue.StringValue` fully parses AnyValue and
+follows protobuf oneof behavior, so a later non-string oneof member makes
 `StringValue` report `found=false` even if an earlier encoded member was a
 string.
 

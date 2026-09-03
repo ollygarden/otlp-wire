@@ -134,7 +134,8 @@ Metric names and KeyValue components are returned as slices of the original
 payload. `Fields` returns the key and encoded AnyValue in one first-match walk
 for hashing-oriented callers; `Key` and `ValueRaw` expose either component
 independently. `StringValue` performs the more expensive semantic parse when
-string meaning is required.
+string meaning is required and follows protobuf oneof ordering, so only the
+last encoded AnyValue oneof member determines whether the value is a string.
 
 `Metric.Metadata` reads field 12. Cardinality consumers combine it with every
 data point's attributes across a whole scrape, so it gets the hot-path

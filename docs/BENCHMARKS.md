@@ -825,7 +825,7 @@ accessors.
 
 ## KeyValue combined field access (E-3340)
 
-Marigold hashes every metric metadata entry and datapoint attribute from both
+marigold hashes every metric metadata entry and datapoint attribute from both
 the `KeyValue.key` and raw `KeyValue.value` fields. Calling `Key` followed by
 `ValueRaw` walks the same envelope twice; `Fields` resolves the same two
 first-match views in one walk.
