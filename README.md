@@ -260,6 +260,7 @@ func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool)   // zero-all
 type KeyValue []byte
 func (kv KeyValue) Key() ([]byte, error)
 func (kv KeyValue) ValueRaw() ([]byte, error)
+func (kv KeyValue) Fields() (key, valueRaw []byte, err error)
 func (kv KeyValue) StringValue() ([]byte, bool, error)
 
 type MetricType int
@@ -359,11 +360,12 @@ resolving them the other way costs a full message walk on every conformant
 payload.
 [docs/DESIGN.md](docs/DESIGN.md) explains why.
 
-`KeyValue.ValueRaw` remains a lightweight view of the first encoded AnyValue
-field for hashing-oriented hot paths. `KeyValue.StringValue` fully parses
-AnyValue and follows protobuf oneof behavior, so a later non-string oneof
-member makes `StringValue` report `found=false` even if an earlier encoded
-member was a string.
+`KeyValue.Fields` returns the first encoded key and AnyValue fields in one
+lightweight scan for hashing-oriented hot paths. `Key` and `ValueRaw` expose
+the same views independently. `KeyValue.StringValue` fully parses AnyValue
+and follows protobuf oneof behavior, so a later non-string oneof member makes
+`StringValue` report `found=false` even if an earlier encoded member was a
+string.
 
 `DataPoint` carries its `MetricType` because the attribute field number differs
 per data point wire type (histograms and exponential histograms encode

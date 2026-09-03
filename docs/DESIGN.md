@@ -131,9 +131,10 @@ iterator therefore tags every `DataPoint` with a `MetricType`; attribute access
 uses that tag rather than guessing from bytes.
 
 Metric names and KeyValue components are returned as slices of the original
-payload. `ValueRaw` exposes the encoded AnyValue for hashing-oriented callers;
-`StringValue` performs the more expensive semantic parse when string meaning
-is required.
+payload. `Fields` returns the key and encoded AnyValue in one first-match walk
+for hashing-oriented callers; `Key` and `ValueRaw` expose either component
+independently. `StringValue` performs the more expensive semantic parse when
+string meaning is required.
 
 `Metric.Metadata` reads field 12. Cardinality consumers combine it with every
 data point's attributes across a whole scrape, so it gets the hot-path
