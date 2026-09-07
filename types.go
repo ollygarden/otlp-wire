@@ -74,3 +74,96 @@ type DataPoint struct {
 
 // KeyValue represents a single KeyValue message (raw wire bytes).
 type KeyValue []byte
+
+// AnyValueType identifies the selected OTLP AnyValue oneof member.
+type AnyValueType uint8
+
+const (
+	AnyValueEmpty AnyValueType = iota
+	AnyValueString
+	AnyValueBool
+	AnyValueInt
+	AnyValueDouble
+	AnyValueArray
+	AnyValueKeyValueList
+	AnyValueBytes
+)
+
+// AnyValue is a fully validated semantic view of an OTLP AnyValue. Byte
+// fields and nested message views alias the input. Float64Bits preserves the
+// exact IEEE-754 representation.
+type AnyValue struct {
+	Type        AnyValueType
+	String      []byte
+	Bool        bool
+	Int         int64
+	Float64Bits uint64
+	Bytes       []byte
+	array       []byte
+	kvlist      []byte
+}
+
+// SemanticKeyValue is a fully validated KeyValue with protobuf singular-field
+// resolution. Duplicate entries in a containing list remain in wire order.
+type SemanticKeyValue struct {
+	Key   []byte
+	Value AnyValue
+}
+
+// SemanticMetric is the protobuf-resolved semantic header and selected body.
+// Header byte views alias the source Metric. Repeated occurrences of the same
+// selected oneof message may require an allocated merged body.
+type SemanticMetric struct {
+	Name, Description, Unit []byte
+	Kind                    MetricType
+	AggregationTemporality  int32
+	Monotonic               bool
+	body                    []byte
+}
+
+// NumberValueType identifies a NumberDataPoint oneof value.
+type NumberValueType uint8
+
+const (
+	NumberValueEmpty NumberValueType = iota
+	NumberValueInt
+	NumberValueDouble
+)
+
+// OptionalFloat64 preserves both protobuf optional presence and exact bits.
+type OptionalFloat64 struct {
+	Present bool
+	Bits    uint64
+}
+
+// ExponentialHistogramBuckets is one side of an exponential histogram.
+type ExponentialHistogramBuckets struct {
+	Offset       int32
+	BucketCounts []uint64
+}
+
+// QuantileValue is an ordered summary quantile/value pair, in exact bits.
+type QuantileValue struct{ QuantileBits, ValueBits uint64 }
+
+// SemanticDataPoint contains the fields consumed by semantic metric
+// processors. Fields not applicable to Kind remain zero. Repeated primitive
+// slices are newly allocated; attributes and nested byte values alias input.
+type SemanticDataPoint struct {
+	Kind                      MetricType
+	Attributes                []SemanticKeyValue
+	StartTimestamp, Timestamp uint64
+	Flags                     uint32
+	NumberType                NumberValueType
+	NumberInt                 int64
+	NumberDoubleBits          uint64
+	Count                     uint64
+	Sum, Min, Max             OptionalFloat64
+	ExplicitBounds            []uint64
+	BucketCounts              []uint64
+	Scale                     int32
+	ZeroThresholdBits         uint64
+	ZeroCount                 uint64
+	Positive, Negative        ExponentialHistogramBuckets
+	SummarySumBits            uint64
+	Quantiles                 []QuantileValue
+}

@@ -12,6 +12,7 @@ OTLP wire format utilities for Go. Count, shard, and route telemetry data withou
 - Iterate over resources with minimal allocations for parallel processing
 - Extract resource metadata for routing decisions
 - Access individual span fields (identifiers, name, kind, timings) with zero allocations
+- Traverse validated semantic metric headers, bodies, datapoints, and recursive attributes
 
 ## Performance Characteristics
 
@@ -109,12 +110,20 @@ ExportMetricsServiceRequest (OTLP message bytes)
             ├─ SchemaUrl()
             └─ Metric[] (individual metrics)
                  ├─ Name()
+                 ├─ Semantic() (last-one-wins header and selected body)
                  └─ DataPoint[] (one per data point, any metric type)
                       ├─ Type()          (Gauge/Sum/Histogram/ExponentialHistogram/Summary)
                       ├─ Timestamp()
                       └─ KeyValue[] (attributes)
                            ├─ Key()
                            └─ ValueRaw()
+
+For stateful metric processing, call
+`ExportMetricsServiceRequest.ValidateSemantic` before mutation, then use
+`Metric.Semantic`, `SemanticMetric.DataPoints`, and `KeyValue.Semantic`.
+Semantic parsing preserves exact floating-point bits and optional presence,
+accepts packed, unpacked, and mixed repeated primitives, and recursively
+validates the consumed AnyValue structure.
 
 ExportLogsServiceRequest (OTLP message bytes)
   └─ ResourceLogs[] (one per resource)

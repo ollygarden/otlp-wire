@@ -157,6 +157,12 @@ accessor read.
 
 ### Diagnosing the Metric accessors
 
+`Metric.Semantic` is the strict alternative for consumers that need protobuf
+resolution and request-level preflight. Pair it with
+`ExportMetricsServiceRequest.ValidateSemantic`; do not infer that the legacy
+`Name` or `DataPointsSeq` accessors gained this deeper validation. Semantic
+results retain views into the request and must not outlive that buffer.
+
 `Metric.Name` scans first-match and stops at field 1. `Metric.Metadata`,
 `MetadataSeq` and `DataPoints` walk what they read. Two consequences when
 reading a consumer's CPU profile:

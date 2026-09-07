@@ -124,6 +124,16 @@ iteration is lazy, an early stop intentionally leaves later bytes unvisited.
 
 ### Metrics
 
+The additive semantic metrics path is deliberately separate from the existing
+first-match and multi-body hot paths. `Metric.Semantic` walks the complete
+message, resolves scalar and oneof fields as protobuf does, merges repeated
+occurrences of the selected message member, and validates every selected
+datapoint. Recursive AnyValues are bounded to 64 levels. Views alias the input
+except when protobuf message merging or repeated primitive materialization
+requires allocation. `ValidateSemantic` composes this depth through resource,
+scope, metric, datapoint, and attribute messages so a stateful consumer can
+reject malformed consumed content before mutation.
+
 A Metric uses a protobuf oneof for gauge, sum, histogram, exponential
 histogram and summary bodies. Every body stores data points in field 1, but the
 data-point message types do not place attributes on the same field. The
