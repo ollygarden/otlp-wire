@@ -101,6 +101,7 @@ type AnyValue struct {
 	Bytes       []byte
 	array       []byte
 	kvlist      []byte
+	depth       int
 }
 
 // SemanticKeyValue is a fully validated KeyValue with protobuf singular-field

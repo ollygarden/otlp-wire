@@ -372,8 +372,9 @@ The semantic metrics API provides pdata-compatible resolution for metric
 name, description, unit, selected body, temporality, monotonicity, and the
 common and type-specific datapoint fields. It preserves exact IEEE-754 bits,
 optional-field presence, repeated order, duplicate attribute entries, and
-packed/unpacked mixtures. `ValidateSemantic` validates this consumed surface
-across a complete request. Unknown well-formed fields are skipped; unknown
+packed/unpacked mixtures. `ValidateSemantic` validates this consumed surface,
+including superseded metric bodies, across a complete request. Unknown
+well-formed fields are skipped; unknown
 groups are validated by `protowire` and can therefore be rejected more
 strictly than generated protobuf unmarshalling. Input views are request-lifetime
 values and must not be retained.

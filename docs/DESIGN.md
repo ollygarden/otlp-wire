@@ -127,8 +127,9 @@ iteration is lazy, an early stop intentionally leaves later bytes unvisited.
 The additive semantic metrics path is deliberately separate from the existing
 first-match and multi-body hot paths. `Metric.Semantic` walks the complete
 message, resolves scalar and oneof fields as protobuf does, merges repeated
-occurrences of the selected message member, and validates every selected
-datapoint. Recursive AnyValues are bounded to 64 levels. Views alias the input
+occurrences of the selected message member, and validates every encountered
+body before returning the selected datapoints. Recursive AnyValues are bounded
+to 64 levels. Views alias the input
 except when protobuf message merging or repeated primitive materialization
 requires allocation. `ValidateSemantic` composes this depth through resource,
 scope, metric, datapoint, and attribute messages so a stateful consumer can
