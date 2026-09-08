@@ -125,7 +125,9 @@ func TestSemanticMetricAllKindsMatchPdataFixture(t *testing.T) {
 				require.Equal(t, "1", string(m.Unit))
 				kinds = append(kinds, m.Kind)
 				points, pointErr := m.DataPoints()
+				seen := 0
 				for p := range points {
+					seen++
 					require.Equal(t, m.Kind, p.Kind)
 					if p.Kind == MetricTypeGauge {
 						require.Equal(t, uint64(1), p.StartTimestamp)
@@ -145,7 +147,7 @@ func TestSemanticMetricAllKindsMatchPdataFixture(t *testing.T) {
 					if p.Kind == MetricTypeHistogram {
 						require.Equal(t, uint64(3), p.Count)
 						require.Equal(t, []uint64{1, 2, 0}, p.BucketCounts)
-						require.Equal(t, []uint64{math.Float64bits(1), math.Float64bits(2)}, p.ExplicitBounds)
+						require.Equal(t, []uint64{math.Float64bits(1), math.Float64bits(2)}, p.ExplicitBoundsBits)
 						require.Equal(t, OptionalFloat64{Present: true, Bits: math.Float64bits(1.5)}, p.Sum)
 						require.Equal(t, OptionalFloat64{Present: true, Bits: math.Float64bits(-1)}, p.Min)
 						require.Equal(t, OptionalFloat64{Present: true, Bits: math.Float64bits(2)}, p.Max)
@@ -168,6 +170,7 @@ func TestSemanticMetricAllKindsMatchPdataFixture(t *testing.T) {
 					}
 				}
 				require.NoError(t, pointErr())
+				require.Equal(t, 1, seen)
 			}
 			require.NoError(t, done())
 		}
@@ -197,10 +200,13 @@ func TestSemanticResolutionPackedMixedAndMalformed(t *testing.T) {
 	require.Equal(t, "last", string(m.Name))
 	require.Equal(t, MetricTypeHistogram, m.Kind)
 	seq, done := m.DataPoints()
+	seen := 0
 	for p := range seq {
+		seen++
 		require.Equal(t, []uint64{1, 2, 3}, p.BucketCounts)
 	}
 	require.NoError(t, done())
+	require.Equal(t, 1, seen)
 	_, err = Metric(append(metric, 0x80)).Semantic()
 	require.Error(t, err)
 }
@@ -335,10 +341,11 @@ func TestSemanticExplicitDefaultsUnknownFieldsAndOneofResolution(t *testing.T) {
 	dp := semanticFixed64Field(nil, 4, 0)
 	dp = semanticFixed64Field(dp, 6, ^uint64(6))
 	dp = semanticVarintField(dp, 99, 42)
-	dp = semanticFixed64Field(dp, 4, math.Float64bits(-0.0))
+	negativeZero := math.Copysign(0, -1)
+	dp = semanticFixed64Field(dp, 4, math.Float64bits(negativeZero))
 	point := semanticPoint(t, MetricTypeGauge, dp)
 	require.Equal(t, NumberValueDouble, point.NumberType)
-	require.Equal(t, math.Float64bits(-0.0), point.NumberDoubleBits)
+	require.Equal(t, math.Float64bits(negativeZero), point.NumberDoubleBits)
 
 	metric := semanticBytesField(nil, 5, semanticBytesField(nil, 1, append(dp, 0x80)))
 	metric = semanticBytesField(metric, 7, nil)

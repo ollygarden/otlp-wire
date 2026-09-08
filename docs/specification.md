@@ -386,8 +386,10 @@ not infer the data-point wire layout independently.
 `Metric.Name`, `Metadata`, `MetadataSeq`, `DataPoint.Raw`, `Timestamp`,
 `Attributes`, `AttributesSeq`, `KeyValue.Key`, and `ValueRaw` return views or
 scalar values without a full metric decode. If a Metric encodes multiple
-recognized body fields, the current traversal yields data points from each body
-in wire order and tags each with its body type.
+recognized body fields, the legacy `Metric.DataPoints` and `DataPointsSeq`
+traversal yields data points from each body in wire order and tags each with its
+body type. `Metric.Semantic` instead resolves the selected body with protobuf
+last-one-wins semantics.
 
 `Metric.Metadata` and `MetadataSeq` iterate `Metric.metadata`, field 12. OTLP
 declares it `repeated`, so the singular-field resolution rules below do not

@@ -377,7 +377,7 @@ func parseHistogramField(d *SemanticDataPoint, n protowire.Number, t protowire.T
 	case 6:
 		return appendRepeated(&d.BucketCounts, t, b, s, protowire.Fixed64Type)
 	case 7:
-		return appendRepeated(&d.ExplicitBounds, t, b, s, protowire.Fixed64Type)
+		return appendRepeated(&d.ExplicitBoundsBits, t, b, s, protowire.Fixed64Type)
 	case 10:
 		if t != protowire.VarintType {
 			return errors.New("wrong histogram flags")

@@ -159,7 +159,7 @@ type SemanticDataPoint struct {
 	NumberDoubleBits          uint64
 	Count                     uint64
 	Sum, Min, Max             OptionalFloat64
-	ExplicitBounds            []uint64
+	ExplicitBoundsBits        []uint64
 	BucketCounts              []uint64
 	Scale                     int32
 	ZeroThresholdBits         uint64

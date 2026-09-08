@@ -121,6 +121,8 @@ ExportMetricsServiceRequest (OTLP message bytes)
 For stateful metric processing, call
 `ExportMetricsServiceRequest.ValidateSemantic` before mutation, then use
 `Metric.Semantic`, `SemanticMetric.DataPoints`, and `KeyValue.Semantic`.
+Call every iterator's returned error closure after iteration, including after
+an early exit, and before committing or mutating state.
 Semantic parsing preserves exact floating-point bits and optional presence,
 accepts packed, unpacked, and mixed repeated primitives, and recursively
 validates the consumed AnyValue structure.
