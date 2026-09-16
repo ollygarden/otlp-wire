@@ -161,6 +161,18 @@ shape of the hot variants is a breaking API change.
 
 ### Parsing and protobuf behavior
 
+`DataPoint.FieldsSeq` is a framing-only traversal for consumers that need
+multiple datapoint fields together. Each yielded `DataPointField` contains its
+number, wire type, and raw numeric bits or length-delimited bytes. It preserves
+all occurrences in order, including unknown fields and checked groups (whose
+values are empty). It does not validate known field types, packed values, or
+nested messages; those checks remain the consumer's responsibility. Its tag
+range follows `protowire.ConsumeTag`, including field numbers above protobuf's
+`MaxValidNumber` through `MaxInt32`. Malformed consumed framing yields one error
+and stops. Early termination leaves the tail unvisited. Returned byte slices
+alias the caller's input and have capacity equal to length. `NewDataPoint`
+constructs a view without validating either the bytes or supplied metric type.
+
 Methods consume protobuf tags directly and must:
 
 - reject malformed tags, lengths, groups and consumed values;

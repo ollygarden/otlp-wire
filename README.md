@@ -253,6 +253,8 @@ func (m Metric) DataPointsSeq(yield func(DataPoint, error) bool)     // zero-all
 type DataPoint struct{ /* unexported */ }
 func (d DataPoint) Raw() []byte
 func (d DataPoint) Type() MetricType
+func NewDataPoint(raw []byte, typ MetricType) DataPoint
+func (d DataPoint) FieldsSeq(yield func(DataPointField, error) bool)
 func (d DataPoint) Timestamp() (uint64, error)
 func (d DataPoint) Attributes() (iter.Seq[KeyValue], func() error)   // ergonomic, 2 allocs per open
 func (d DataPoint) AttributesSeq(yield func(KeyValue, error) bool)   // zero-alloc, range directly
@@ -367,6 +369,16 @@ the same views separately. `KeyValue.StringValue` fully parses AnyValue and
 follows protobuf oneof behavior, so a later non-string oneof member makes
 `StringValue` report `found=false` even if an earlier encoded member was a
 string.
+
+`DataPoint.FieldsSeq` decodes top-level fields once for consumers that need
+numeric values and attributes together. `DataPointField` exposes `Number`,
+`Type`, `Uint64` (varint or fixed-width bits), and `Bytes` (a capacity-clamped
+view of a length-delimited value). It checks protobuf framing; callers check
+known field wire types and nested contents. Groups are checked and yielded
+with empty values; repeated occurrences remain in wire order. An early stop
+leaves the tail unvalidated. `NewDataPoint` wraps bytes from an existing
+consumer traversal without copying or validating them. See
+`ExampleDataPoint_FieldsSeq` for explicit consumer validation.
 
 `DataPoint` carries its `MetricType` because the attribute field number differs
 per data point wire type (histograms and exponential histograms encode
