@@ -7,6 +7,30 @@ Comparison of otlp-wire operations vs traditional unmarshal/marshal approaches.
 - Data: 5 resources, 100 data points/spans/logs per resource
 - Go version: 1.24.5
 
+## Datapoint field traversal
+
+`BenchmarkDataPointFields` compares one combined traversal with two separate
+traversals using the same `FieldsSeq` implementation. Both collect the same
+timestamp and attribute-byte lengths from one gauge datapoint with 12
+attributes. This isolates traversal overhead; it is not a comparison against
+the previous release or a whole-service CPU measurement.
+
+Measured on Apple M5, Darwin/arm64, Go 1.26.6, with a prebuilt test binary and
+five alternating `SeparatePasses`/`SinglePass` invocations, one second per arm:
+
+| Arm | Median ns/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| SeparatePasses | 154.7 | 0 | 0 |
+| SinglePass | 79.41 | 0 | 0 |
+
+The median paired reduction is 48.5%; all five rounds improve. Reproduce with
+`go test -c -o /tmp/otlp-wire-fields.test`, then alternate
+`/tmp/otlp-wire-fields.test -test.run '^$' -test.bench
+'BenchmarkDataPointFields/SeparatePasses$' -test.benchtime 1s` and the same
+command with `SinglePass`. Consumer benchmarks must additionally cover
+decompression, validation, hashing, and detector state before claiming an
+application improvement.
+
 ## Counting Operations
 
 Counting is available at both batch and resource levels with the same performance characteristics.

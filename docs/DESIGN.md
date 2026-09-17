@@ -17,6 +17,21 @@ Typed accessors and iterators reject wrong wire types for fields they select;
 unknown well-formed fields are skipped so newer OTLP producers remain
 compatible.
 
+## Datapoint field traversal
+
+`DataPoint.FieldsSeq` exposes decoded top-level fields to consumers that read
+scalar values and attributes together. This avoids a separate walk per field
+family while leaving schema validation, hashing, and duplicate resolution in
+the consumer. The iterator checks tags and value framing with `protowire`,
+yields groups without interpreting their contents, and clamps returned byte
+capacities. Numeric fields expose raw bits. It allocates no state and stops at
+the first parse error or consumer stop. `NewDataPoint` lets a caller that has
+already selected a metric body wrap its datapoint bytes and enclosing type.
+
+Existing accessors retain their field-specific semantics. Paired benchmarks
+and consumer output parity are required before replacing bespoke parsers,
+since fewer traversals alone does not establish application savings.
+
 ## Package shape
 
 The repository is one Go module and one package. Production implementation is

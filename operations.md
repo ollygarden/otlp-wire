@@ -157,6 +157,19 @@ accessor read.
 
 ### Diagnosing the Metric accessors
 
+`DataPoint.FieldsSeq` supports one walk for scalar fields and attributes. It
+does not validate known wire types or nested attribute, exemplar, or bucket
+contents. A consumer replacing a strict parser must preserve those checks;
+successful iteration alone is not proof of a valid OTLP datapoint. Groups are
+yielded so a consumer can reject them at known fields. The framing check
+inherits `protowire`'s accepted tag range through `MaxInt32`, including numbers
+above protobuf's `MaxValidNumber`. Allocation and fuzz tests pin this boundary.
+
+Returned slices retain the request buffer. Consumers that put temporary field
+views into pools must clear every populated backing-array slot on success,
+early termination, and error, including slots beyond a slice's current length.
+Otherwise a rejected message can remain retained by reusable scratch state.
+
 `Metric.Name` scans first-match and stops at field 1. `Metric.Metadata`,
 `MetadataSeq` and `DataPoints` walk what they read. Two consequences when
 reading a consumer's CPU profile:
