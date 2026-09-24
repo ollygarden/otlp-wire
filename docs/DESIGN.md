@@ -32,6 +32,18 @@ Existing accessors retain their field-specific semantics. Paired benchmarks
 and consumer output parity are required before replacing bespoke parsers,
 since fewer traversals alone does not establish application savings.
 
+`LogRecord.FieldsSeq` is the same shape applied to `LogRecord`: framing-only,
+zero-allocation, encoded order. It exists alongside the schema-aware
+`parseLogRecordSeverity` walk rather than replacing it — `SeverityNumber` and
+friends need semantic validation of `body` and `attributes`, while a consumer
+that wants several top-level fields in one pass (a timestamp, a raw body to
+hand to `ParseAnyValue`, and the raw bytes of every field to hash record
+identity) does not. `AnyValue` and `ParseAnyValue` give that consumer a public
+view of the internal `parseAnyValue` oneof walk that already backs
+`KeyValue.StringValue`, extended to carry every oneof member's decoded value
+(not just the string one) so a caller can decode a `body` or `KeyValue.Value()`
+without depending on pdata.
+
 ## Package shape
 
 The repository is one Go module and one package. Production implementation is

@@ -31,6 +31,22 @@ command with `SinglePass`. Consumer benchmarks must additionally cover
 decompression, validation, hashing, and detector state before claiming an
 application improvement.
 
+## LogRecord field traversal
+
+`BenchmarkLogRecordFields` walks a representative LogRecord (timestamp,
+observed timestamp, severity number/text, a string body, and four
+attributes, matching pdata's back-to-front marshal order) with `FieldsSeq`,
+summing `Uint64` and `len(Bytes)` across all fields in one pass.
+
+Measured on Apple M5, Darwin/arm64, Go 1.26.6, `-benchtime=1s -count=3`:
+
+| ns/op | B/op | allocs/op |
+| ---: | ---: | ---: |
+| 62.36–64.23 | 0 | 0 |
+
+Reproduce with `go test -run '^$' -bench BenchmarkLogRecordFields -benchmem
+-benchtime=1s ./...`.
+
 ## Counting Operations
 
 Counting is available at both batch and resource levels with the same performance characteristics.

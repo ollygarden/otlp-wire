@@ -429,6 +429,17 @@ The library does not classify severity bands, and `Severity` returning the two
 fields together does not rank them: which one wins when the number and the text
 disagree remains consumer policy.
 
+`LogRecord.FieldsSeq` is a zero-allocation, framing-only walk of every
+top-level LogRecord field in encoded order, mirroring `DataPoint.FieldsSeq`.
+It validates tags and value framing but not nested `body`/`attributes`
+contents, leaving schema validation, hashing, and field selection to the
+consumer. `ParseAnyValue` decodes a raw `AnyValue` message — a `body`, an
+array element, or a `KeyValue`'s value — into the public `AnyValue` view,
+applying pdata's last-value-wins oneof resolution. `AnyValue.KeyValuesSeq`
+iterates a `AnyValueKeyValueList`'s entries; `KeyValue.Value` returns the
+decoded `AnyValue` for a `KeyValue`'s value field using the same
+last-value-wins walk that backs `KeyValue.StringValue`.
+
 ### Trace depth
 
 Trace traversal exposes scopes and spans. `TraceID`, `SpanID`, and
@@ -530,6 +541,13 @@ At the time of this audit, repository-wide GitHub search found direct source
 imports in 12 OllyGarden services: Bindweed, Chaff, Dibber, Fig, Gaps, Loam,
 Marigold, Mulch, Nameplate, Overstory, Sage and Seedtray. A source-compatible
 change can still be behaviorally breaking for these services.
+
+`LogRecord.FieldsSeq` and `AnyValue`/`ParseAnyValue` (E-3880) were added as a
+prerequisite for Bale, an access-log-to-metrics detector planned to read
+`time_unix_nano`, `body`, and `attributes` from one field walk and hash
+record identity from the raw top-level field bytes, excluding
+`observed_time_unix_nano`. Bale is not yet a source import at the time of
+this addition; it will join the audited consumer list once it lands.
 
 ## Release and rollout model
 
