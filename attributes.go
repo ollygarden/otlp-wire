@@ -99,7 +99,9 @@ type parsedAnyValue struct {
 func (v parsedAnyValue) toPublic() AnyValue {
 	switch v.kind {
 	case anyValueString:
-		return AnyValue{Kind: AnyValueString, Str: v.stringValue}
+		// Clamped so a caller's append reallocates instead of overwriting the
+		// sibling fields that follow this one in the parsed buffer.
+		return AnyValue{Kind: AnyValueString, Str: v.stringValue[:len(v.stringValue):len(v.stringValue)]}
 	case anyValueBool:
 		return AnyValue{Kind: AnyValueBool, Bool: v.boolValue}
 	case anyValueInt:

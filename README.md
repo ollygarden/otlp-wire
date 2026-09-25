@@ -352,14 +352,14 @@ to hash record identity from the raw field bytes; callers decide which fields
 matter and validate nested `body`/`attributes` contents themselves, for
 example with `ParseAnyValue` or `KeyValue.Value`.
 
-`ParseAnyValue` decodes an OTLP `AnyValue` message (a `LogRecord.body`, or a
-`KeyValue.Value()`) with the same last-value-wins oneof resolution pdata
-uses: every field is parsed, including ones a later oneof member supersedes,
-so malformed trailing data is never hidden behind an earlier value. `Str` and
-`Raw` alias the parsed buffer. `AnyValue.KeyValuesSeq` iterates a
-`AnyValueKeyValueList`'s entries (field 1, repeated `KeyValue`) and is a
-no-op for any other `Kind`. `KeyValue.Value` reuses the same last-value-wins
-walk that backs `KeyValue.StringValue`.
+`ParseAnyValue` decodes an OTLP `AnyValue` message (a `LogRecord.body`, or the
+bytes from `KeyValue.ValueRaw()`) with the same last-value-wins oneof
+resolution pdata uses: every field is parsed, including ones a later oneof
+member supersedes, so malformed trailing data is never hidden behind an
+earlier value. `Str` and `Raw` alias the parsed buffer. `AnyValue.KeyValuesSeq`
+iterates a `AnyValueKeyValueList`'s entries (field 1, repeated `KeyValue`) and
+is a no-op for any other `Kind`. `KeyValue.Value` reuses the same
+last-value-wins walk that backs `KeyValue.StringValue`.
 
 `Resource.StringAttribute` is zero-copy and returns a separate `found` value,
 so a missing resource attribute can be distinguished from a present empty

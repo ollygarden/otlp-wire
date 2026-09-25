@@ -255,3 +255,28 @@ func TestKeyValue_ValueLastWinsMatchesStringValue(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, "wins", string(str))
 }
+
+// TestParseAnyValue_StrIsCapacityClamped pins the guarantee that Str cannot be
+// appended into the bytes of a field that follows it in the parsed buffer.
+// protowire.ConsumeBytes hands back a subslice whose capacity runs to the end
+// of the enclosing buffer, so without a clamp in toPublic a caller's append
+// would corrupt data it does not own.
+func TestParseAnyValue_StrIsCapacityClamped(t *testing.T) {
+	var data []byte
+	data = protowire.AppendTag(data, 1, protowire.BytesType)
+	data = protowire.AppendString(data, "hello")
+	data = protowire.AppendTag(data, 99, protowire.VarintType)
+	data = protowire.AppendVarint(data, 42)
+	original := append([]byte(nil), data...)
+
+	got, err := ParseAnyValue(data)
+	require.NoError(t, err)
+	require.Equal(t, AnyValueString, got.Kind)
+	require.Equal(t, "hello", string(got.Str))
+	require.Equal(t, len(got.Str), cap(got.Str),
+		"Str must be capacity-clamped so a caller's append cannot overwrite sibling bytes")
+
+	_ = append(got.Str, "overwritten"...)
+	require.Equal(t, original, data,
+		"appending to Str must not corrupt the bytes of a field that follows it in the parsed buffer")
+}
