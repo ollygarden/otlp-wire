@@ -12,6 +12,7 @@ OTLP wire format utilities for Go. Count, shard, and route telemetry data withou
 - Iterate over resources with minimal allocations for parallel processing
 - Extract resource metadata for routing decisions
 - Access individual span fields (identifiers, name, kind, timings) with zero allocations
+- Walk log record top-level fields and decode `AnyValue` bodies/attributes without full unmarshal
 
 ## Performance Characteristics
 
@@ -127,7 +128,8 @@ ExportLogsServiceRequest (OTLP message bytes)
                  ├─ SeverityNumber()
                  ├─ SeverityText()
                  ├─ Severity()       (both fields, strict nested validation)
-                 └─ SeverityFields() (both fields, top-level validation)
+                 ├─ SeverityFields() (both fields, top-level validation)
+                 └─ FieldsSeq()      (all top-level fields, zero-alloc)
 
 ExportTracesServiceRequest (OTLP message bytes)
   └─ ResourceSpans[] (one per resource)
@@ -264,6 +266,30 @@ func (kv KeyValue) Key() ([]byte, error)
 func (kv KeyValue) ValueRaw() ([]byte, error)
 func (kv KeyValue) Fields() (key, valueRaw []byte, err error)
 func (kv KeyValue) StringValue() ([]byte, bool, error)
+func (kv KeyValue) Value() (AnyValue, error)
+
+type AnyValueKind uint8
+const (
+	AnyValueEmpty AnyValueKind = iota
+	AnyValueString
+	AnyValueBool
+	AnyValueInt
+	AnyValueDouble
+	AnyValueArray
+	AnyValueKeyValueList
+	AnyValueBytes
+)
+
+type AnyValue struct {
+	Kind   AnyValueKind
+	Str    []byte  // AnyValueString
+	Bool   bool    // AnyValueBool
+	Int    int64   // AnyValueInt
+	Double float64 // AnyValueDouble
+	Raw    []byte  // AnyValueArray/AnyValueKeyValueList: message body; AnyValueBytes: the bytes value
+}
+func ParseAnyValue(raw []byte) (AnyValue, error)
+func (v AnyValue) KeyValuesSeq(yield func(KeyValue, error) bool) // AnyValueKeyValueList only
 
 type MetricType int
 const (
@@ -288,6 +314,9 @@ func (r LogRecord) SeverityNumber() (int32, error)
 func (r LogRecord) SeverityText() ([]byte, error)
 func (r LogRecord) Severity() (int32, []byte, error) // both fields, one walk
 func (r LogRecord) SeverityFields() (int32, []byte, error) // skips nested body/attribute validation
+func (r LogRecord) FieldsSeq(yield func(LogRecordField, error) bool) // zero-alloc top-level field walk
+
+type LogRecordField struct{ Number protowire.Number; Type protowire.Type; Bytes []byte; Uint64 uint64 }
 
 type Resource []byte
 func (r Resource) Attributes() (iter.Seq[KeyValue], func() error)
@@ -313,6 +342,24 @@ and the text disagree.
 `LogRecord.SeverityFields` shares that top-level walk and field resolution but
 does not recursively validate body or attribute contents. It is the scoped
 operation for detectors that do not consume those nested values next.
+
+`LogRecord.FieldsSeq` is the zero-allocation alternative to the severity
+walks: it checks top-level framing only and yields every field — including
+`time_unix_nano` (1), `body` (5), `attributes` (6), and
+`observed_time_unix_nano` (11) — in encoded order, mirroring
+`DataPoint.FieldsSeq`. Use it to read several top-level fields in one pass, or
+to hash record identity from the raw field bytes; callers decide which fields
+matter and validate nested `body`/`attributes` contents themselves, for
+example with `ParseAnyValue` or `KeyValue.Value`.
+
+`ParseAnyValue` decodes an OTLP `AnyValue` message (a `LogRecord.body`, or the
+bytes from `KeyValue.ValueRaw()`) with the same last-value-wins oneof
+resolution pdata uses: every field is parsed, including ones a later oneof
+member supersedes, so malformed trailing data is never hidden behind an
+earlier value. `Str` and `Raw` alias the parsed buffer. `AnyValue.KeyValuesSeq`
+iterates a `AnyValueKeyValueList`'s entries (field 1, repeated `KeyValue`) and
+is a no-op for any other `Kind`. `KeyValue.Value` reuses the same
+last-value-wins walk that backs `KeyValue.StringValue`.
 
 `Resource.StringAttribute` is zero-copy and returns a separate `found` value,
 so a missing resource attribute can be distinguished from a present empty

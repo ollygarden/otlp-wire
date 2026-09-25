@@ -140,6 +140,55 @@ func (s ScopeLogs) LogRecordsSeq(yield func(LogRecord, error) bool) {
 	repeatedFieldSeq2([]byte(s), 2, yield)
 }
 
+// FieldsSeq walks the top-level wire fields of a LogRecord once, in encoded
+// order. It checks framing, not schema: callers validate known field types
+// and nested message contents themselves. Groups are checked and yielded
+// with empty values. Repeated fields are not resolved; use FieldsSeq to hash
+// record identity or to read time_unix_nano (field 1, fixed64), body (field
+// 5, AnyValue via ParseAnyValue), and attributes (field 6, repeated
+// KeyValue) in one pass instead of the schema-aware severity walk. Tag
+// validity follows protowire.ConsumeTag, which accepts numbers through
+// MaxInt32, including numbers above protobuf's MaxValidNumber. Returning
+// false stops immediately, leaving the remaining bytes unvalidated. An error
+// is yielded once with a zero field, then iteration stops.
+func (r LogRecord) FieldsSeq(yield func(LogRecordField, error) bool) {
+	data := []byte(r)
+	for len(data) > 0 {
+		number, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			yield(LogRecordField{}, errors.New("malformed protobuf tag in log record"))
+			return
+		}
+		data = data[n:]
+		field := LogRecordField{Number: number, Type: typ}
+		switch typ {
+		case protowire.VarintType:
+			field.Uint64, n = protowire.ConsumeVarint(data)
+		case protowire.Fixed32Type:
+			var value uint32
+			value, n = protowire.ConsumeFixed32(data)
+			field.Uint64 = uint64(value)
+		case protowire.Fixed64Type:
+			field.Uint64, n = protowire.ConsumeFixed64(data)
+		case protowire.BytesType:
+			field.Bytes, n = protowire.ConsumeBytes(data)
+			if n >= 0 {
+				field.Bytes = field.Bytes[:len(field.Bytes):len(field.Bytes)]
+			}
+		default:
+			n = protowire.ConsumeFieldValue(number, typ, data)
+		}
+		if n < 0 {
+			yield(LogRecordField{}, errors.New("malformed protobuf field in log record"))
+			return
+		}
+		data = data[n:]
+		if !yield(field, nil) {
+			return
+		}
+	}
+}
+
 // SeverityNumber returns the LogRecord severity_number enum (field 2).
 // It returns 0 when the field is absent. Values are represented as int32 so
 // that unexpected negative protobuf enum values remain distinguishable from

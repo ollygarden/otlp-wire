@@ -1,6 +1,8 @@
 // Package otlpwire provides utilities for working with OTLP wire format data.
 package otlpwire
 
+import "google.golang.org/protobuf/encoding/protowire"
+
 // ExportMetricsServiceRequest represents an OTLP ExportMetricsServiceRequest message.
 type ExportMetricsServiceRequest []byte
 
@@ -74,3 +76,42 @@ type DataPoint struct {
 
 // KeyValue represents a single KeyValue message (raw wire bytes).
 type KeyValue []byte
+
+// LogRecordField is a decoded top-level wire field of a LogRecord. Bytes
+// aliases the request for length-delimited fields; Uint64 contains varint or
+// fixed bits. Interpret values according to Type and Number.
+type LogRecordField struct {
+	Number protowire.Number
+	Type   protowire.Type
+	Bytes  []byte
+	Uint64 uint64
+}
+
+// AnyValueKind identifies which member of an OTLP AnyValue oneof is set.
+type AnyValueKind uint8
+
+// AnyValue oneof members, in AnyValue protobuf field order.
+const (
+	AnyValueEmpty AnyValueKind = iota
+	AnyValueString
+	AnyValueBool
+	AnyValueInt
+	AnyValueDouble
+	AnyValueArray
+	AnyValueKeyValueList
+	AnyValueBytes
+)
+
+// AnyValue is a decoded view of an OTLP AnyValue oneof, resolved with pdata's
+// last-value-wins semantics. Only the field matching Kind is meaningful. Str
+// and Raw alias the buffer that was parsed. For AnyValueArray and
+// AnyValueKeyValueList, Raw holds the raw ArrayValue/KeyValueList message
+// body; for AnyValueBytes, Raw holds the byte value itself.
+type AnyValue struct {
+	Kind   AnyValueKind
+	Str    []byte
+	Bool   bool
+	Int    int64
+	Double float64
+	Raw    []byte
+}

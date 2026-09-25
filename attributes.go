@@ -3,6 +3,7 @@ package otlpwire
 import (
 	"errors"
 	"iter"
+	"math"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -82,6 +83,40 @@ const (
 type parsedAnyValue struct {
 	kind        anyValueKind
 	stringValue []byte
+	boolValue   bool
+	intValue    int64
+	doubleValue float64
+	// rawValue holds the bytes_value payload, or the raw ArrayValue/
+	// KeyValueList message body, matching AnyValue.Raw's contract.
+	rawValue []byte
+}
+
+// toPublic converts the internal parse result to the public AnyValue view.
+// anyValueUnset and anyValueStringIndex both surface as AnyValueEmpty: this
+// package does not resolve the experimental string-dictionary indirection
+// behind string_value_strindex, so a value whose last oneof member is that
+// field is reported as unset rather than guessed at.
+func (v parsedAnyValue) toPublic() AnyValue {
+	switch v.kind {
+	case anyValueString:
+		// Clamped so a caller's append reallocates instead of overwriting the
+		// sibling fields that follow this one in the parsed buffer.
+		return AnyValue{Kind: AnyValueString, Str: v.stringValue[:len(v.stringValue):len(v.stringValue)]}
+	case anyValueBool:
+		return AnyValue{Kind: AnyValueBool, Bool: v.boolValue}
+	case anyValueInt:
+		return AnyValue{Kind: AnyValueInt, Int: v.intValue}
+	case anyValueDouble:
+		return AnyValue{Kind: AnyValueDouble, Double: v.doubleValue}
+	case anyValueArray:
+		return AnyValue{Kind: AnyValueArray, Raw: v.rawValue}
+	case anyValueKeyValueList:
+		return AnyValue{Kind: AnyValueKeyValueList, Raw: v.rawValue}
+	case anyValueBytes:
+		return AnyValue{Kind: AnyValueBytes, Raw: v.rawValue}
+	default:
+		return AnyValue{}
+	}
 }
 
 const semanticParseMaxDepth = 64
@@ -191,17 +226,20 @@ func parseAnyValueDepth(data []byte, value *parsedAnyValue, depth int) error {
 			if wireType != protowire.VarintType {
 				return errors.New("wrong wire type for any value varint")
 			}
-			_, n := protowire.ConsumeVarint(data[pos:])
+			raw, n := protowire.ConsumeVarint(data[pos:])
 			if n < 0 {
 				return errors.New("invalid varint in any value")
 			}
 			switch fieldNum {
 			case 2:
 				value.kind = anyValueBool
+				value.boolValue = raw != 0
 			case 3:
 				value.kind = anyValueInt
+				value.intValue = int64(raw)
 			case 8:
 				value.kind = anyValueStringIndex
+				value.intValue = int64(raw)
 			}
 			value.stringValue = nil
 			pos += n
@@ -209,11 +247,12 @@ func parseAnyValueDepth(data []byte, value *parsedAnyValue, depth int) error {
 			if wireType != protowire.Fixed64Type {
 				return errors.New("wrong wire type for any value double")
 			}
-			_, n := protowire.ConsumeFixed64(data[pos:])
+			bits, n := protowire.ConsumeFixed64(data[pos:])
 			if n < 0 {
 				return errors.New("invalid fixed64 in any value double")
 			}
 			value.kind = anyValueDouble
+			value.doubleValue = math.Float64frombits(bits)
 			value.stringValue = nil
 			pos += n
 		case 5, 6, 7: // array_value, kvlist_value, bytes_value
@@ -239,6 +278,9 @@ func parseAnyValueDepth(data []byte, value *parsedAnyValue, depth int) error {
 				value.kind = anyValueBytes
 			}
 			value.stringValue = nil
+			// Clamped so a caller's append reallocates instead of overwriting
+			// the sibling fields that follow this one.
+			value.rawValue = message[:len(message):len(message)]
 			pos += n
 		default:
 			n := skipField(data[pos:], fieldNum, wireType)
@@ -317,6 +359,39 @@ func validateKeyValueListDepth(data []byte, depth int) error {
 		pos += n
 	}
 	return nil
+}
+
+// ParseAnyValue decodes raw as an OTLP AnyValue message, applying pdata's
+// last-value-wins oneof resolution: every field is parsed, including ones
+// superseded by a later oneof member, so malformed trailing data is never
+// hidden behind an earlier value. Str and Raw alias raw.
+func ParseAnyValue(raw []byte) (AnyValue, error) {
+	var value parsedAnyValue
+	if err := parseAnyValue(raw, &value); err != nil {
+		return AnyValue{}, err
+	}
+	return value.toPublic(), nil
+}
+
+// KeyValuesSeq iterates the KeyValueList entries in v.Raw. It is a no-op
+// unless v.Kind is AnyValueKeyValueList; on a nested parse error it yields a
+// nil KeyValue with a non-nil error and stops.
+func (v AnyValue) KeyValuesSeq(yield func(KeyValue, error) bool) {
+	if v.Kind != AnyValueKeyValueList {
+		return
+	}
+	repeatedFieldSeq2(v.Raw, 1, yield)
+}
+
+// Value returns the decoded AnyValue for this KeyValue's value field (field
+// 2). It reuses the same last-value-wins walk that backs StringValue, so it
+// carries the same pdata-compatible oneof resolution.
+func (kv KeyValue) Value() (AnyValue, error) {
+	_, _, value, err := parseKeyValue([]byte(kv))
+	if err != nil {
+		return AnyValue{}, err
+	}
+	return value.toPublic(), nil
 }
 
 type resourceStringAttributeState struct {
