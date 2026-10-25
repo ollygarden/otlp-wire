@@ -10,7 +10,7 @@ guardrails, testing patterns, and change-specific validation matrix.
 
 ## Set up and validate
 
-Use Go 1.26.6 or newer. CI pins Go 1.26.6.
+Use Go 1.27.3 or newer. CI pins Go 1.27.3.
 
 ```bash
 go test -v -race ./...
@@ -19,11 +19,8 @@ git diff --check
 test -z "${BASE_SHA:-}" || git diff --check "${BASE_SHA}...HEAD"
 ```
 
-The current `go.sum` retains checksum history from earlier dependency versions,
-so `go mod tidy -diff` reports baseline drift. For dependency changes, run
-`go mod tidy` and review both `go.mod` and `go.sum` intentionally, but keep
-unrelated checksum cleanup out of a focused change unless reconciling that
-baseline is part of the task.
+For dependency changes, run `go mod tidy`, confirm `go mod tidy -diff` is
+clean, and review both `go.mod` and `go.sum` intentionally.
 
 Run focused tests and benchmarks as needed:
 
