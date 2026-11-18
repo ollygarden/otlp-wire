@@ -1018,5 +1018,6 @@ benchstat hand.txt seq.txt
 ```
 
 `benchstat` over the two ten-sample runs puts `AttributesSeq` about 4% slower
-(p=0.000), the same single-digit cost as `MetadataSeq`: the capacity clamp plus
-one indirect call per element. Neither arm allocates.
+(p=0.000), a single-digit difference like the one measured for `MetadataSeq`.
+This is the net difference between the two implementations. It is not
+attributed to any one operation. Neither arm allocates.
