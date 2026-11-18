@@ -77,6 +77,17 @@ func requireValueMatches(t *testing.T, got AnyValue, want pcommon.Value) {
 		require.Equal(t, want.Bytes().AsRaw(), got.Raw)
 	case pcommon.ValueTypeSlice:
 		require.Equal(t, AnyValueArray, got.Kind)
+		i := 0
+		forEachRepeatedField(got.Raw, 1, func(raw []byte, err error) bool {
+			require.NoError(t, err)
+			require.Less(t, i, want.Slice().Len())
+			element, err := ParseAnyValue(raw)
+			require.NoError(t, err)
+			requireValueMatches(t, element, want.Slice().At(i))
+			i++
+			return true
+		})
+		require.Equal(t, want.Slice().Len(), i)
 	case pcommon.ValueTypeMap:
 		require.Equal(t, AnyValueKeyValueList, got.Kind)
 		i := 0
