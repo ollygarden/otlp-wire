@@ -1007,6 +1007,16 @@ go test -run '^$' -bench 'BenchmarkSpan_Attributes_' -benchmem -count=10 ./...
 | `BenchmarkSpan_Attributes_HandRolled` | 22,840 | 0 | 0 |
 | `BenchmarkSpan_Attributes_Seq` | 23,740 | 0 | 0 |
 
+Compare the arms by normalizing both names to one benchmark and giving
+`benchstat` one file per arm:
+
+```bash
+go test -run '^$' -bench 'BenchmarkSpan_Attributes_' -benchmem -count=10 ./... > all.txt
+grep HandRolled all.txt | sed 's/_HandRolled/_X/' > hand.txt
+grep Seq all.txt | sed 's/_Seq/_X/' > seq.txt
+benchstat hand.txt seq.txt
+```
+
 `benchstat` over the two ten-sample runs puts `AttributesSeq` about 4% slower
 (p=0.000), the same single-digit cost as `MetadataSeq`: the capacity clamp plus
 one indirect call per element. Neither arm allocates.
