@@ -275,20 +275,53 @@ func TestSpanAttributesSeq_Malformed(t *testing.T) {
 }
 
 // TestSpanAttributesSeq_FramingOnlyDivergence pins the narrower validity
-// claim: the walk checks the span's framing, not its other fields, so a
-// wrongly sized trace id that Name would reject does not stop attributes.
+// claim: the walk checks the span's framing, not its other fields or nested
+// bodies. A wrongly sized trace id that Name rejects, and a corrupt event body,
+// do not stop attributes. A corrupt KeyValue body is still handed out as a
+// view and surfaces when the caller reads it.
 func TestSpanAttributesSeq_FramingOnlyDivergence(t *testing.T) {
-	span := Span(slices.Concat(idField(1, []byte{1, 2, 3}), bytesField(9, stringKeyValue("a", "1"))))
+	t.Run("wrong sized trace id", func(t *testing.T) {
+		span := Span(slices.Concat(idField(1, []byte{1, 2, 3}), bytesField(9, stringKeyValue("a", "1"))))
 
-	_, nameErr := span.Name()
-	require.Error(t, nameErr)
+		_, nameErr := span.Name()
+		require.Error(t, nameErr)
 
-	n := 0
-	for _, err := range span.AttributesSeq {
-		require.NoError(t, err)
-		n++
-	}
-	require.Equal(t, 1, n)
+		n := 0
+		for _, err := range span.AttributesSeq {
+			require.NoError(t, err)
+			n++
+		}
+		require.Equal(t, 1, n)
+	})
+
+	t.Run("corrupt event body", func(t *testing.T) {
+		span := Span(slices.Concat(
+			bytesField(11, []byte{0x80}), // framed event whose inner tag is truncated
+			bytesField(9, stringKeyValue("a", "1")),
+		))
+
+		n := 0
+		for kv, err := range span.AttributesSeq {
+			require.NoError(t, err)
+			_, _, err = kv.Fields()
+			require.NoError(t, err)
+			n++
+		}
+		require.Equal(t, 1, n)
+	})
+
+	t.Run("corrupt key value body", func(t *testing.T) {
+		span := Span(bytesField(9, []byte{0x80})) // framed attribute whose inner tag is truncated
+
+		n := 0
+		for kv, err := range span.AttributesSeq {
+			require.NoError(t, err)
+			_, _, err = kv.Fields()
+			require.Error(t, err)
+			n++
+		}
+		require.Equal(t, 1, n)
+	})
 }
 
 func TestSpanAttributesSeq_EarlyStopLeavesLaterCorruptionUnvisited(t *testing.T) {
