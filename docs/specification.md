@@ -472,6 +472,15 @@ schema-aware at the Span level and framing-only below it: `attributes`,
 their contents are not parsed. Cost therefore tracks a span's field count
 rather than its payload size.
 
+`Span.AttributesSeq` yields every `attributes` entry (field 9) as a `KeyValue`
+view, in wire order and duplicate keys included. Attributes are `repeated`, so
+no singular-field resolution applies. It shares the `Resource.AttributesSeq`
+walk: tags and lengths of every Span field are checked, the KeyValue contents
+and the other Span fields are not. A span with a wrongly sized `trace_id`
+therefore still yields its attributes while `Name` reports an error. Event and
+link attributes live in their own messages and are never yielded. Yielded views
+are capacity-clamped.
+
 The identifier accessors scan first-match and stop, so they do not walk to the
 end of the span and do not report corruption located after the identifier they
 read. On conformant OTLP that is indistinguishable from the scalar accessors'
@@ -500,7 +509,7 @@ is part of this library's purpose and compatibility surface.
 - Ordinary iterator opens have the documented small closure cost.
 - `ResourceMetricsSeq`, `ScopeMetricsSeq`, `ResourceLogsSeq`, `ScopeLogsSeq`,
   `ResourceSpansSeq`, `ScopeSpansSeq`, `DataPointsSeq`, `MetadataSeq`,
-  `AttributesSeq` (on both `Resource` and `InstrumentationScope`), and
+  `AttributesSeq` (on `Resource`, `InstrumentationScope` and `Span`), and
   `LogRecordsSeq` remain zero-allocation on their per-element paths.
 - Accessors return aliased slices rather than copying payload data, with one
   documented exception: `Resource()` and `Scope()` alias the input when a

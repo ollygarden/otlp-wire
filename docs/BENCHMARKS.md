@@ -986,3 +986,38 @@ occurrence through a `forEachRepeatedField` closure where `extractBytesField`
 runs a flat loop — a per-call cost the remaining last-value-wins accessors
 still pay. Isolating it needs its own paired benchmark, which this change does
 not add.
+
+## `Span.AttributesSeq` (E-4747)
+
+`AttributesSeq` against the hand-rolled field-9 walk a consumer writes without
+it (regia's span walker).
+
+**Environment:** Apple M3 Pro, darwin/arm64, Go 1.27.3. **Fixture:**
+`benchSpanAttrsPayload`, 100 spans with identifiers, timestamps, ten attributes,
+one event and a status. Spans are collected before the timer starts, so the
+arms measure the attribute walk alone. Each attribute is read with
+`KeyValue.Fields`.
+
+```bash
+go test -run '^$' -bench 'BenchmarkSpan_Attributes_' -benchmem -count=10 ./...
+```
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| `BenchmarkSpan_Attributes_HandRolled` | 22,840 | 0 | 0 |
+| `BenchmarkSpan_Attributes_Seq` | 23,740 | 0 | 0 |
+
+Compare the arms by normalizing both names to one benchmark and giving
+`benchstat` one file per arm:
+
+```bash
+go test -run '^$' -bench 'BenchmarkSpan_Attributes_' -benchmem -count=10 ./... > all.txt
+grep HandRolled all.txt | sed 's/_HandRolled/_X/' > hand.txt
+grep Seq all.txt | sed 's/_Seq/_X/' > seq.txt
+benchstat hand.txt seq.txt
+```
+
+`benchstat` over the two ten-sample runs puts `AttributesSeq` about 4% slower
+(p=0.000), a single-digit difference like the one measured for `MetadataSeq`.
+This is the net difference between the two implementations. It is not
+attributed to any one operation. Neither arm allocates.

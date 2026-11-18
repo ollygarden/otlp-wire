@@ -137,6 +137,7 @@ paths therefore expose yield methods shaped like `iter.Seq2[T, error]`:
 - `Metric.MetadataSeq`;
 - `DataPoint.AttributesSeq`;
 - `Resource.AttributesSeq`;
+- `Span.AttributesSeq`;
 - `ScopeLogs.LogRecordsSeq`.
 
 These yield errors inline and keep the per-element walk on the stack. The

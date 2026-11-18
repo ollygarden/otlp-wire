@@ -1945,3 +1945,124 @@ func BenchmarkSpan_TraceIDOnly(b *testing.B) {
 		benchSpanFieldsSink = total
 	}
 }
+
+// ========== Span attributes ==========
+
+var benchSpanAttrsSink int
+
+// benchSpanAttrsPayload builds spans shaped like a typical HTTP server
+// exporter: identifiers and times, ten attributes, one event and a status, so
+// the walk has to step over fields that are not attributes.
+func benchSpanAttrsPayload(b *testing.B) []byte {
+	b.Helper()
+
+	traces := ptrace.NewTraces()
+	spans := traces.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty().Spans()
+	for i := range 100 {
+		span := spans.AppendEmpty()
+		span.SetTraceID(pcommon.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, byte(i)})
+		span.SetSpanID(pcommon.SpanID{1, 2, 3, 4, 5, 6, 7, byte(i)})
+		span.SetName("GET /orders/{id}")
+		span.SetKind(ptrace.SpanKindServer)
+		span.SetStartTimestamp(1)
+		span.SetEndTimestamp(2)
+		span.Attributes().PutStr("http.request.method", "GET")
+		span.Attributes().PutStr("url.path", "/orders/1234")
+		span.Attributes().PutStr("http.route", "/orders/{id}")
+		span.Attributes().PutInt("http.response.status_code", 200)
+		span.Attributes().PutStr("server.address", "api.example.com")
+		span.Attributes().PutInt("server.port", 443)
+		span.Attributes().PutStr("user_agent.original", "Mozilla/5.0 (X11; Linux x86_64)")
+		span.Attributes().PutStr("network.protocol.version", "1.1")
+		span.Attributes().PutStr("url.scheme", "https")
+		span.Attributes().PutBool("cache.hit", false)
+		span.Events().AppendEmpty().SetName("exception")
+		span.Status().SetCode(ptrace.StatusCodeOk)
+	}
+	payload, err := (&ptrace.ProtoMarshaler{}).MarshalTraces(traces)
+	require.NoError(b, err)
+	return payload
+}
+
+// spanAttrsHandRolled is the walker a consumer writes without an accessor:
+// one pass over the Span, reading every field 9 occurrence.
+func spanAttrsHandRolled(span Span, fn func(KeyValue) error) error {
+	data := []byte(span)
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return errors.New("malformed tag")
+		}
+		data = data[n:]
+		if num == 9 && typ == protowire.BytesType {
+			v, m := protowire.ConsumeBytes(data)
+			if m < 0 {
+				return errors.New("malformed attribute")
+			}
+			if err := fn(KeyValue(v)); err != nil {
+				return err
+			}
+			data = data[m:]
+			continue
+		}
+		m := protowire.ConsumeFieldValue(num, typ, data)
+		if m < 0 {
+			return errors.New("malformed field")
+		}
+		data = data[m:]
+	}
+	return nil
+}
+
+// benchSpanAttrsSpans collects the spans outside the timed region so the arms
+// measure the attribute walk alone, not the Spans() iterator open.
+func benchSpanAttrsSpans(b *testing.B) []Span {
+	b.Helper()
+	var spans []Span
+	forEachBenchSpan(b, benchSpanAttrsPayload(b), func(span Span) { spans = append(spans, span) })
+	return spans
+}
+
+func BenchmarkSpan_Attributes_HandRolled(b *testing.B) {
+	spans := benchSpanAttrsSpans(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		total := 0
+		for _, span := range spans {
+			err := spanAttrsHandRolled(span, func(kv KeyValue) error {
+				key, value, err := kv.Fields()
+				total += len(key) + len(value)
+				return err
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		benchSpanAttrsSink = total
+	}
+}
+
+func BenchmarkSpan_Attributes_Seq(b *testing.B) {
+	spans := benchSpanAttrsSpans(b)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		total := 0
+		for _, span := range spans {
+			for kv, err := range span.AttributesSeq {
+				if err != nil {
+					b.Fatal(err)
+				}
+				key, value, err := kv.Fields()
+				if err != nil {
+					b.Fatal(err)
+				}
+				total += len(key) + len(value)
+			}
+		}
+		benchSpanAttrsSink = total
+	}
+}

@@ -228,6 +228,7 @@ func (s Span) Name() ([]byte, error)
 func (s Span) Kind() (int32, error)
 func (s Span) StartTimeUnixNano() (uint64, error)
 func (s Span) EndTimeUnixNano() (uint64, error)
+func (s Span) AttributesSeq(yield func(KeyValue, error) bool)  // zero-alloc, range directly
 ```
 
 `Name`, `Kind` and the two timestamps share one schema-aware walk of the whole
@@ -237,6 +238,19 @@ which is cheaper and identical on conformant OTLP. See
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the measured costs and
 [operations.md](operations.md) for where the two behaviors differ on malformed
 input.
+
+`AttributesSeq` yields each span attribute (field 9) as a `KeyValue` view and
+allocates nothing. It checks the span's framing only, so it does not share the
+validity verdict of the scalar accessors above:
+
+```go
+for kv, err := range span.AttributesSeq {
+    if err != nil { return err }
+    key, value, err := kv.Fields()
+    if err != nil { return err }
+    // use key and value
+}
+```
 
 **Scope- and metric-level operations (metrics depth):**
 ```go
