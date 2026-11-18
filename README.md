@@ -247,7 +247,8 @@ validity verdict of the scalar accessors above:
 for kv, err := range span.AttributesSeq {
     if err != nil { return err }
     key, value, err := kv.Fields()
-    // ...
+    if err != nil { return err }
+    // use key and value
 }
 ```
 
