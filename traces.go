@@ -196,6 +196,24 @@ func (s Span) EndTimeUnixNano() (uint64, error) {
 	return fields.endUnixNano, err
 }
 
+// AttributesSeq iterates the Span's attributes (field 9) as KeyValue views.
+// It has the shape of an iter.Seq2[KeyValue, error] and is meant to be ranged
+// over directly:
+//
+//	for kv, err := range span.AttributesSeq {
+//		if err != nil { ... }
+//	}
+//
+// Every occurrence is yielded in wire order, duplicate keys included. On a
+// parse error it yields a nil KeyValue with a non-nil error and stops. Like
+// the other attribute iterators it is zero-allocation and checks framing only:
+// the walk validates the Span's own tags and field lengths but does not parse
+// the KeyValue contents or the other Span fields, so it can accept bytes that
+// Name or Kind would reject. Use KeyValue.Key and ValueRaw to read each entry.
+func (s Span) AttributesSeq(yield func(KeyValue, error) bool) {
+	repeatedFieldSeq2([]byte(s), 9, yield)
+}
+
 // spanFields holds the Span scalars that resolve last-value-wins. It is
 // returned by value and never escapes, so the accessors stay allocation-free.
 type spanFields struct {
